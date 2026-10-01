@@ -1,619 +1,2722 @@
 import os
-import ast
-import io
-import contextlib
+import sys
+import json
+import time
 import sqlite3
-import traceback
-from flask import Flask, render_template_string, request, jsonify
+import subprocess
+import tempfile
+import threading
+from pathlib import Path
+
+from flask import Flask, request, jsonify, render_template_string
+
+
+# ============================================================
+# APP CONFIG
+# ============================================================
 
 app = Flask(__name__)
 
-MAX_CODE_SIZE = 20_000
-MAX_SQL_SIZE = 20_000
-MAX_OUTPUT_SIZE = 50_000
+# No artificial application code-size limit.
+# Real server/browser/memory limits still apply.
+app.config["MAX_CONTENT_LENGTH"] = None
 
-# Render does not persist pip-installed packages between deployments/restarts.
-# These are listed as supported/available packages instead.
-ALLOWED_PACKAGES = {
-    "requests",
-    "colorama",
-    "rich",
-    "numpy",
-    "pillow",
+PORT = int(os.environ.get("PORT", "5000"))
+HOST = "0.0.0.0"
+
+PYTHON_TIMEOUT = 60
+SQL_TIMEOUT = 30
+PIP_TIMEOUT = 180
+
+DB_FILE = os.environ.get(
+    "NEON_DB",
+    os.path.join(tempfile.gettempdir(), "neon_programming_hub.db")
+)
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS playgrounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            language TEXT NOT NULL,
+            code TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+# ============================================================
+# TRANSLATIONS
+# ============================================================
+
+TRANSLATIONS = {
+    "en": {
+        "brand": "NEON PROGRAMMING HUB",
+        "subtitle": "Code. Experiment. Build.",
+        "run": "▶ Run",
+        "clear": "Clear",
+        "copy": "Copy",
+        "examples": "Examples",
+        "playgrounds": "Playgrounds",
+        "packages": "Packages",
+        "install": "Install Package",
+        "language": "Language",
+        "output": "Output",
+        "python": "Python",
+        "html": "HTML",
+        "css": "CSS",
+        "javascript": "JavaScript",
+        "sql": "SQL",
+        "new_playground": "New Playground",
+        "save": "Save",
+        "delete": "Delete",
+        "package_name": "Package name",
+        "package_help": "Install any package available from PyPI.",
+        "ready": "Ready.",
+        "running": "Running...",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "loading": "Loading...",
+        "error": "Error",
+        "welcome": "Welcome to Neon Programming Hub!",
+        "example_loaded": "Example loaded.",
+        "no_code": "No code entered.",
+        "select_language": "Select a language",
+        "name": "Name",
+    },
+
+    "de": {
+        "brand": "NEON PROGRAMMING HUB",
+        "subtitle": "Programmieren. Experimentieren. Bauen.",
+        "run": "▶ Ausführen",
+        "clear": "Leeren",
+        "copy": "Kopieren",
+        "examples": "Beispiele",
+        "playgrounds": "Playgrounds",
+        "packages": "Pakete",
+        "install": "Paket installieren",
+        "language": "Sprache",
+        "output": "Ausgabe",
+        "python": "Python",
+        "html": "HTML",
+        "css": "CSS",
+        "javascript": "JavaScript",
+        "sql": "SQL",
+        "new_playground": "Neuer Playground",
+        "save": "Speichern",
+        "delete": "Löschen",
+        "package_name": "Paketname",
+        "package_help": "Installiere beliebige Pakete, die auf PyPI verfügbar sind.",
+        "ready": "Bereit.",
+        "running": "Wird ausgeführt...",
+        "saved": "Gespeichert.",
+        "deleted": "Gelöscht.",
+        "loading": "Lädt...",
+        "error": "Fehler",
+        "welcome": "Willkommen beim Neon Programming Hub!",
+        "example_loaded": "Beispiel geladen.",
+        "no_code": "Kein Code eingegeben.",
+        "select_language": "Sprache auswählen",
+        "name": "Name",
+    }
 }
+
+
+# ============================================================
+# EXAMPLES
+# ============================================================
+
+EXAMPLES = {
+
+    "python": [
+
+        {
+            "name": "Hello World",
+            "code": """print("Hello, world!")
+"""
+        },
+
+        {
+            "name": "Calculator",
+            "code": """a = 25
+b = 7
+
+print("Addition:", a + b)
+print("Subtraction:", a - b)
+print("Multiplication:", a * b)
+print("Division:", a / b)
+"""
+        },
+
+        {
+            "name": "Loops",
+            "code": """for number in range(1, 11):
+    print("Number:", number)
+"""
+        },
+
+        {
+            "name": "Lists",
+            "code": """players = [
+    "Raphael",
+    "Alex",
+    "Steve",
+    "Notch"
+]
+
+for player in players:
+    print(player)
+"""
+        },
+
+        {
+            "name": "Functions",
+            "code": """def greet(name):
+    return f"Hello, {name}!"
+
+print(greet("Raphael"))
+"""
+        },
+
+        {
+            "name": "Dictionary",
+            "code": """player = {
+    "name": "Raphael",
+    "level": 42,
+    "coins": 1337
+}
+
+print(player["name"])
+print(player["level"])
+print(player["coins"])
+"""
+        },
+
+        {
+            "name": "Random Numbers",
+            "code": """import random
+
+number = random.randint(1, 100)
+
+print("Random number:", number)
+"""
+        },
+
+        {
+            "name": "Date & Time",
+            "code": """from datetime import datetime
+
+now = datetime.now()
+
+print("Current time:")
+print(now)
+"""
+        },
+
+        {
+            "name": "JSON",
+            "code": """import json
+
+data = {
+    "player": "Raphael",
+    "level": 50,
+    "online": True
+}
+
+text = json.dumps(data, indent=2)
+
+print(text)
+"""
+        },
+
+        {
+            "name": "Classes",
+            "code": """class Player:
+    def __init__(self, name, level):
+        self.name = name
+        self.level = level
+
+    def info(self):
+        print(self.name, "is level", self.level)
+
+
+player = Player("Raphael", 100)
+
+player.info()
+"""
+        },
+
+        {
+            "name": "File Example",
+            "code": """from pathlib import Path
+
+file = Path("example.txt")
+
+file.write_text(
+    "Hello from Neon Programming Hub!"
+)
+
+print(file.read_text())
+"""
+        },
+
+        {
+            "name": "HTTP Request",
+            "code": """import requests
+
+response = requests.get(
+    "https://example.com",
+    timeout=10
+)
+
+print("Status:", response.status_code)
+print(response.text[:500])
+"""
+        },
+
+        {
+            "name": "NumPy",
+            "code": """import numpy as np
+
+numbers = np.array([1, 2, 3, 4, 5])
+
+print(numbers)
+print("Mean:", numbers.mean())
+print("Sum:", numbers.sum())
+"""
+        },
+
+        {
+            "name": "Rich Terminal",
+            "code": """from rich.console import Console
+
+console = Console()
+
+console.print(
+    "[bold cyan]NEON PROGRAMMING HUB[/bold cyan]"
+)
+
+console.print(
+    "[green]Everything works![/green]"
+)
+"""
+        }
+    ],
+
+    "html": [
+
+        {
+            "name": "Basic HTML",
+            "code": """<!DOCTYPE html>
+<html>
+<head>
+    <title>Neon Page</title>
+</head>
+
+<body>
+
+<h1>Hello World!</h1>
+
+<p>Welcome to my website.</p>
+
+</body>
+</html>
+"""
+        },
+
+        {
+            "name": "Button",
+            "code": """<!DOCTYPE html>
+<html>
+
+<body>
+
+<button onclick="alert('Hello!')">
+    Click me
+</button>
+
+</body>
+</html>
+"""
+        },
+
+        {
+            "name": "Card",
+            "code": """<div class="card">
+
+    <h1>Neon Card</h1>
+
+    <p>
+        This is a simple HTML card.
+    </p>
+
+    <button>
+        Open
+    </button>
+
+</div>
+"""
+        },
+
+        {
+            "name": "Video",
+            "code": """<!DOCTYPE html>
+<html>
+
+<body>
+
+<h1>Video Player</h1>
+
+<video controls width="700">
+    <source src="video.mp4" type="video/mp4">
+</video>
+
+</body>
+</html>
+"""
+        }
+    ],
+
+    "css": [
+
+        {
+            "name": "Neon Button",
+            "code": """.button {
+    background: #080808;
+    color: #00ffff;
+
+    border: 2px solid #00ffff;
+
+    padding: 15px 30px;
+
+    border-radius: 12px;
+
+    box-shadow:
+        0 0 10px #00ffff;
+
+    cursor: pointer;
+}
+"""
+        },
+
+        {
+            "name": "Neon Card",
+            "code": """.card {
+    background: #101018;
+
+    border: 1px solid #8a2be2;
+
+    border-radius: 20px;
+
+    padding: 25px;
+
+    box-shadow:
+        0 0 25px rgba(138,43,226,0.5);
+}
+"""
+        },
+
+        {
+            "name": "Animation",
+            "code": """@keyframes pulse {
+
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+"""
+        }
+    ],
+
+    "javascript": [
+
+        {
+            "name": "Hello",
+            "code": """console.log("Hello from JavaScript!");
+"""
+        },
+
+        {
+            "name": "Counter",
+            "code": """let counter = 0;
+
+counter++;
+
+console.log("Counter:", counter);
+"""
+        },
+
+        {
+            "name": "Function",
+            "code": """function greet(name) {
+    return `Hello, ${name}!`;
+}
+
+console.log(greet("Raphael"));
+"""
+        },
+
+        {
+            "name": "Array",
+            "code": """const players = [
+    "Steve",
+    "Alex",
+    "Raphael"
+];
+
+players.forEach(player => {
+    console.log(player);
+});
+"""
+        }
+    ],
+
+    "sql": [
+
+        {
+            "name": "Create Table",
+            "code": """CREATE TABLE players (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    level INTEGER
+);
+
+INSERT INTO players
+(name, level)
+VALUES
+('Raphael', 42);
+
+SELECT * FROM players;
+"""
+        },
+
+        {
+            "name": "Multiple Players",
+            "code": """CREATE TABLE players (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    level INTEGER
+);
+
+INSERT INTO players
+(name, level)
+VALUES
+('Steve', 20),
+('Alex', 35),
+('Raphael', 100);
+
+SELECT *
+FROM players
+ORDER BY level DESC;
+"""
+        },
+
+        {
+            "name": "WHERE",
+            "code": """CREATE TABLE players (
+    name TEXT,
+    level INTEGER
+);
+
+INSERT INTO players VALUES
+('Steve', 10),
+('Alex', 50),
+('Raphael', 100);
+
+SELECT *
+FROM players
+WHERE level >= 50;
+"""
+        }
+    ]
+}
+
+
+# ============================================================
+# DEFAULT PLAYGROUNDS
+# ============================================================
+
+DEFAULT_PLAYGROUNDS = [
+    {
+        "name": "Python Playground",
+        "language": "python",
+        "code": EXAMPLES["python"][0]["code"]
+    },
+    {
+        "name": "HTML Playground",
+        "language": "html",
+        "code": EXAMPLES["html"][0]["code"]
+    },
+    {
+        "name": "CSS Playground",
+        "language": "css",
+        "code": EXAMPLES["css"][0]["code"]
+    },
+    {
+        "name": "JavaScript Playground",
+        "language": "javascript",
+        "code": EXAMPLES["javascript"][0]["code"]
+    },
+    {
+        "name": "SQL Playground",
+        "language": "sql",
+        "code": EXAMPLES["sql"][0]["code"]
+    }
+]
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def execute_python(code):
+    if not code.strip():
+        return {
+            "success": False,
+            "output": "No code entered."
+        }
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".py",
+            delete=False,
+            encoding="utf-8"
+        ) as file:
+
+            file.write(code)
+            temp_path = file.name
+
+        started = time.time()
+
+        result = subprocess.run(
+            [sys.executable, temp_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=PYTHON_TIMEOUT,
+            cwd=tempfile.gettempdir()
+        )
+
+        elapsed = time.time() - started
+
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout,
+            "returncode": result.returncode,
+            "time": round(elapsed, 3)
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "output": "Execution timed out."
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "output": str(exc)
+        }
+
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def execute_sql(code):
+    if not code.strip():
+        return {
+            "success": False,
+            "output": "No SQL entered."
+        }
+
+    conn = None
+
+    try:
+        conn = sqlite3.connect(":memory:")
+
+        cursor = conn.cursor()
+
+        cursor.executescript(code)
+
+        rows = cursor.fetchall()
+
+        if cursor.description:
+            columns = [
+                description[0]
+                for description in cursor.description
+            ]
+
+            output = json.dumps(
+                {
+                    "columns": columns,
+                    "rows": rows
+                },
+                indent=2,
+                default=str
+            )
+        else:
+            output = f"SQL executed successfully. Rows affected: {cursor.rowcount}"
+
+        return {
+            "success": True,
+            "output": output
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "output": str(exc)
+        }
+
+    finally:
+        if conn:
+            conn.close()
+
+
+def install_package(package):
+    package = package.strip()
+
+    if not package:
+        return {
+            "success": False,
+            "output": "Please enter a package name."
+        }
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                package
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=PIP_TIMEOUT
+        )
+
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout,
+            "returncode": result.returncode
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "output": "Package installation timed out."
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "output": str(exc)
+        }
+
+
+# ============================================================
+# API ROUTES
+# ============================================================
+
+@app.get("/health")
+def health():
+    return jsonify({
+        "status": "online",
+        "service": "Neon Programming Hub"
+    })
+
+
+@app.get("/")
+def index():
+    return render_template_string(HTML)
+
+
+@app.post("/api/python/run")
+def api_python_run():
+    data = request.get_json(silent=True) or {}
+
+    code = data.get("code", "")
+
+    return jsonify(
+        execute_python(code)
+    )
+
+
+@app.post("/api/python/install")
+def api_python_install():
+    data = request.get_json(silent=True) or {}
+
+    package = data.get("package", "")
+
+    return jsonify(
+        install_package(package)
+    )
+
+
+@app.post("/api/sql/run")
+def api_sql_run():
+    data = request.get_json(silent=True) or {}
+
+    code = data.get("code", "")
+
+    return jsonify(
+        execute_sql(code)
+    )
+
+
+@app.get("/api/examples")
+def api_examples():
+    return jsonify(EXAMPLES)
+
+
+@app.get("/api/playgrounds")
+def api_playgrounds():
+
+    conn = sqlite3.connect(DB_FILE)
+
+    rows = conn.execute("""
+        SELECT id, name, language, code, created_at
+        FROM playgrounds
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    result = []
+
+    for row in rows:
+        result.append({
+            "id": row[0],
+            "name": row[1],
+            "language": row[2],
+            "code": row[3],
+            "created_at": row[4]
+        })
+
+    return jsonify(result)
+
+
+@app.post("/api/playgrounds")
+def api_create_playground():
+
+    data = request.get_json(silent=True) or {}
+
+    name = data.get("name", "Untitled Playground")
+    language = data.get("language", "python")
+    code = data.get("code", "")
+
+    conn = sqlite3.connect(DB_FILE)
+
+    cursor = conn.execute("""
+        INSERT INTO playgrounds
+        (name, language, code, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        name,
+        language,
+        code,
+        time.time()
+    ))
+
+    conn.commit()
+
+    playground_id = cursor.lastrowid
+
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "id": playground_id
+    })
+
+
+@app.delete("/api/playgrounds/<int:playground_id>")
+def api_delete_playground(playground_id):
+
+    conn = sqlite3.connect(DB_FILE)
+
+    conn.execute(
+        "DELETE FROM playgrounds WHERE id = ?",
+        (playground_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True
+    })
+
+
+# ============================================================
+# HTML
+# ============================================================
 
 HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
 <title>Neon Programming Hub</title>
+
 <style>
-*{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:Arial,sans-serif;color:#fff;background:radial-gradient(circle at 20% 20%,#7c3aed55,transparent 35%),radial-gradient(circle at 80% 80%,#2563eb55,transparent 35%),#050510}
-.grid{position:fixed;inset:0;background-image:linear-gradient(#ffffff08 1px,transparent 1px),linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
-.screen{position:fixed;inset:0;width:100%;height:100%;display:none;z-index:1;overflow-y:auto;overflow-x:hidden;padding:15px;-webkit-overflow-scrolling:touch}
-.screen.active{display:block;animation:screenIn .3s ease}
-@keyframes screenIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
-.center{min-height:100%;display:flex;justify-content:center;align-items:center;padding:20px}
-.card{width:min(850px,100%);padding:50px 25px;text-align:center;background:#0a0a1ed9;border:1px solid #b482ff59;border-radius:30px;box-shadow:0 0 50px #7832ff4d;backdrop-filter:blur(15px)}
-.badge{display:inline-block;padding:8px 16px;border-radius:999px;background:#8250ff26;border:1px solid #aa78ff66;color:#c4a7ff;font-size:13px;margin-bottom:20px}
-h1{margin:0;font-size:clamp(50px,12vw,90px);letter-spacing:-4px;background:linear-gradient(90deg,#fff,#c084fc,#60a5fa,#fff);background-size:300%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:gradient 5s infinite}
-@keyframes gradient{0%{background-position:0%}50%{background-position:100%}100%{background-position:0%}}
-h2{margin:0;font-size:clamp(40px,9vw,70px);background:linear-gradient(90deg,#60a5fa,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-p{color:#aaa9c5;font-size:17px;line-height:1.5}
-.status{display:inline-block;margin-top:20px;padding:12px 20px;border-radius:12px;background:#00ff9614;border:1px solid #00ff9640;color:#5dffb0}
-.button{display:inline-block;margin-top:20px;padding:14px 22px;border:0;border-radius:13px;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;font-size:15px;font-weight:bold;cursor:pointer;box-shadow:0 8px 25px #5032ff4d;transition:.2s;-webkit-tap-highlight-color:transparent}
-.button:active,.language:active,.small-button:active{transform:scale(.96)}
-.hub{width:min(1100px,100%);margin:auto;text-align:center;padding:20px 0 50px}
-.languages{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:14px;margin-top:25px}
-.language{padding:22px 12px;background:#0f0f23d9;border:1px solid #ffffff14;border-radius:20px;cursor:pointer;transition:.2s;-webkit-tap-highlight-color:transparent}
-.language:hover{transform:translateY(-4px);border-color:#b482ff66;box-shadow:0 10px 35px #6432ff2e}
-.language-icon{font-size:40px;margin-bottom:8px}.language h3{margin:7px 0;font-size:19px}.language p{margin:0;font-size:13px;color:#88879e}
-.tutorial{width:min(1000px,100%);margin:auto;padding:10px 0 60px}.tutorial-header{text-align:center;margin-bottom:25px}.tutorial-icon{font-size:65px}
-.lesson{background:#0c0c20eb;border:1px solid #b482ff33;border-radius:20px;padding:22px;margin-bottom:18px;text-align:left}.lesson h3{margin-top:0;color:#c4a7ff;font-size:22px}.lesson p{font-size:15px}
-pre{background:#030308;border:1px solid #ffffff14;border-radius:14px;padding:16px;overflow-x:auto;color:#e8e5ff;font-family:Consolas,monospace;font-size:14px;line-height:1.6}
-.terminal{background:#020205;border:1px solid #ffffff1a;border-radius:18px;overflow:hidden;margin-top:15px}.terminal-top{padding:10px 14px;background:#11111b;display:flex;gap:7px;align-items:center}.term-dot{width:11px;height:11px;border-radius:50%;background:#555}.terminal-title{margin-left:8px;color:#999;font-size:13px}.terminal-body{padding:18px;min-height:130px;font-family:Consolas,monospace;font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-x:auto;color:#d9d5ff}
-.editor{width:100%;min-height:220px;resize:vertical;background:#030308;color:#e8e5ff;border:1px solid #ffffff1a;border-radius:14px;padding:16px;font-family:Consolas,monospace;font-size:14px;line-height:1.6;outline:0}.editor:focus{border-color:#7c3aed}
-.output{background:#020205;color:#d9d5ff;min-height:100px;border:1px solid #ffffff1a;border-radius:14px;padding:15px;font-family:Consolas,monospace;white-space:pre-wrap;overflow-x:auto}
-.controls{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.input{flex:1;min-width:180px;padding:13px;background:#080812;border:1px solid #ffffff1a;border-radius:10px;color:#fff;outline:0}.small-button{padding:12px 18px;border:0;border-radius:10px;background:#27204b;color:#fff;cursor:pointer;font-weight:bold}
-.packages{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.package{padding:7px 11px;border-radius:999px;background:#7c3aed26;border:1px solid #7c3aed4d;color:#cdb8ff;font-size:12px}
-.preview{width:100%;height:300px;border:1px solid #ffffff1a;border-radius:14px;background:#fff}
-.info{padding:14px;border-radius:12px;background:#7c3aed18;border:1px solid #7c3aed33;color:#cdb8ff}
-.health{font-size:13px;color:#7ee7b0}
-@media(max-width:600px){.screen{padding:10px}.card{padding:40px 18px}.languages{grid-template-columns:1fr 1fr}.lesson{padding:18px}.tutorial{padding-top:5px}}
-@media(max-width:360px){.languages{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
-<div class="grid"></div>
 
-<div id="home" class="screen active"><div class="center"><div class="card">
-<div class="badge">🌐 RENDER • FLASK • ONLINE</div>
-<h1>NEON</h1>
-<p>Your online programming laboratory. Learn, experiment and build.</p>
-<div class="status">🟢 SERVER ONLINE</div><br>
-<button class="button" onclick="showScreen('languages')">🚀 Programming Academy</button><br>
-<button class="button" onclick="showScreen('python-test')">🧪 Python Test Area</button>
-</div></div></div>
-
-<div id="languages" class="screen"><div class="hub">
-<div class="badge">💻 PROGRAMMING ACADEMY</div><h2>Languages</h2><p>Choose a language to start learning.</p>
-<div class="languages">
-<div class="language" onclick="showScreen('python')"><div class="language-icon">🐍</div><h3>Python</h3><p>General programming</p></div>
-<div class="language" onclick="showScreen('html')"><div class="language-icon">🌐</div><h3>HTML</h3><p>Web structure</p></div>
-<div class="language" onclick="showScreen('css')"><div class="language-icon">🎨</div><h3>CSS</h3><p>Web design</p></div>
-<div class="language" onclick="showScreen('javascript')"><div class="language-icon">⚡</div><h3>JavaScript</h3><p>Web interaction</p></div>
-<div class="language" onclick="showScreen('java')"><div class="language-icon">☕</div><h3>Java</h3><p>Applications</p></div>
-<div class="language" onclick="showScreen('c')"><div class="language-icon">💻</div><h3>C</h3><p>Low-level programming</p></div>
-<div class="language" onclick="showScreen('cpp')"><div class="language-icon">🔷</div><h3>C++</h3><p>Games & applications</p></div>
-<div class="language" onclick="showScreen('csharp')"><div class="language-icon">🟣</div><h3>C#</h3><p>.NET & games</p></div>
-<div class="language" onclick="showScreen('rust')"><div class="language-icon">🦀</div><h3>Rust</h3><p>Fast & safe</p></div>
-<div class="language" onclick="showScreen('php')"><div class="language-icon">🐘</div><h3>PHP</h3><p>Web backend</p></div>
-<div class="language" onclick="showScreen('ruby')"><div class="language-icon">💎</div><h3>Ruby</h3><p>Readable programming</p></div>
-<div class="language" onclick="showScreen('go')"><div class="language-icon">🐹</div><h3>Go</h3><p>Backend development</p></div>
-<div class="language" onclick="showScreen('kotlin')"><div class="language-icon">🦫</div><h3>Kotlin</h3><p>Modern JVM</p></div>
-<div class="language" onclick="showScreen('swift')"><div class="language-icon">🐦</div><h3>Swift</h3><p>Apple development</p></div>
-<div class="language" onclick="showScreen('sql')"><div class="language-icon">🗄️</div><h3>SQL</h3><p>Databases</p></div>
-</div>
-<button class="button" onclick="showScreen('home')">← Back Home</button>
-</div></div>
-
-<div id="python" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🐍</div><h2>Python</h2><p>Learn Python from the basics.</p></div>
-<div class="lesson"><h3>1. Hello World</h3><p>The print function displays text.</p><pre>print("Hello, World!")</pre></div>
-<div class="lesson"><h3>2. Variables</h3><pre>name = "Neon"
-age = 15
-print(name)
-print(age)</pre></div>
-<div class="lesson"><h3>3. Conditions</h3><pre>age = 15
-if age >= 18:
-    print("Adult")
-else:
-    print("Not an adult")</pre></div>
-<div class="lesson"><h3>4. Loops</h3><pre>for number in range(5):
-    print(number)</pre></div>
-<div class="lesson"><h3>💻 Python Tutorial Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Python</span></div><div class="terminal-body">>>> print("Hello!")
-Hello!
-
->>> 2 + 3
-5
-
->>> name = "Neon"
->>> print(name)
-Neon</div></div><button class="button" onclick="showScreen('python-test')">🧪 Open Python Test Area</button></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
-
-<div id="python-test" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🧪</div><h2>Python Test Area</h2><p>Run safe Python examples in the server-side playground.</p></div>
-<div class="lesson"><h3>🐍 Python Editor</h3>
-<textarea id="pythonCode" class="editor" spellcheck="false">print("Hello from Neon!")
-
-numbers = [1, 2, 3, 4, 5]
-
-for number in numbers:
-    print(number)</textarea>
-<div class="controls"><button class="small-button" onclick="runPython()">▶ Run</button><button class="small-button" onclick="clearPython()">🗑 Clear</button></div>
-<h3>Output</h3><pre id="pythonOutput" class="output">Ready.</pre></div>
-<div class="lesson"><h3>📦 Python Libraries</h3><p>Render installs dependencies during deployment. These are the supported libraries for this project:</p>
-<div class="packages"><span class="package">requests</span><span class="package">colorama</span><span class="package">rich</span><span class="package">numpy</span><span class="package">pillow</span></div>
-<div class="info">💡 To add a library permanently, put it in <b>requirements.txt</b> and redeploy on Render.</div>
-<pre id="packageOutput" class="output">Package manager ready.</pre></div>
-<div class="lesson"><h3>☁️ Render mode</h3><p>This version is designed for a public Render Web Service. The Python playground uses a restricted AST interpreter rather than executing arbitrary server commands.</p></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
-
-<div id="html" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🌐</div><h2>HTML</h2><p>Build webpages.</p></div>
-<div class="lesson"><h3>Basic HTML</h3><pre>&lt;!DOCTYPE html&gt;
-&lt;html&gt;
-&lt;body&gt;
-    &lt;h1&gt;Hello!&lt;/h1&gt;
-    &lt;p&gt;My website!&lt;/p&gt;
-&lt;/body&gt;
-&lt;/html&gt;</pre></div>
-<div class="lesson"><h3>🌐 Live HTML Playground</h3><textarea id="htmlCode" class="editor" spellcheck="false">&lt;h1&gt;Hello Neon!&lt;/h1&gt;
-&lt;p&gt;This is my website.&lt;/p&gt;
-&lt;button onclick="alert('Hello!')"&gt;Click Me&lt;/button&gt;</textarea><br><button class="small-button" onclick="runHTML()">▶ Preview</button><br><br><iframe id="htmlPreview" class="preview" sandbox></iframe></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
-
-<div id="css" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🎨</div><h2>CSS</h2><p>Style your webpages.</p></div>
-<div class="lesson"><h3>Basic CSS</h3><pre>body {
-    background: black;
-    color: white;
+* {
+    box-sizing: border-box;
 }
-h1 {
-    font-size: 50px;
-}</pre></div>
-<div class="lesson"><h3>🎨 Live CSS Playground</h3><textarea id="cssCode" class="editor" spellcheck="false">body {
-    background: #101020;
-    color: white;
-    font-family: Arial;
+
+:root {
+    --bg: #050509;
+    --panel: #0c0c14;
+    --panel2: #11111c;
+    --border: #272738;
+    --cyan: #00ffff;
+    --purple: #9d4edd;
+    --text: #f5f5ff;
+    --muted: #888899;
+    --green: #35ff8a;
+    --red: #ff4f70;
+}
+
+body {
+    margin: 0;
+    background:
+        radial-gradient(
+            circle at top left,
+            rgba(157, 78, 221, 0.18),
+            transparent 35%
+        ),
+        radial-gradient(
+            circle at bottom right,
+            rgba(0, 255, 255, 0.10),
+            transparent 35%
+        ),
+        var(--bg);
+
+    color: var(--text);
+
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    min-height: 100vh;
+}
+
+header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+
+    backdrop-filter: blur(18px);
+
+    background:
+        rgba(5, 5, 9, 0.82);
+
+    border-bottom:
+        1px solid var(--border);
+
+    padding: 16px 20px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 15px;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo-icon {
+    width: 44px;
+    height: 44px;
+
+    border-radius: 13px;
+
+    display: grid;
+    place-items: center;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--purple),
+            var(--cyan)
+        );
+
+    color: #000;
+
+    font-weight: 1000;
+
+    box-shadow:
+        0 0 25px rgba(0,255,255,.25);
+}
+
+.logo h1 {
+    font-size: 17px;
+    margin: 0;
+}
+
+.logo span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.header-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+select,
+input,
+button {
+    font: inherit;
+}
+
+select,
+input {
+    background: var(--panel2);
+    color: var(--text);
+
+    border: 1px solid var(--border);
+
+    border-radius: 10px;
+
+    padding: 10px 12px;
+
+    outline: none;
+}
+
+select:focus,
+input:focus {
+    border-color: var(--cyan);
+
+    box-shadow:
+        0 0 0 2px rgba(0,255,255,.08);
+}
+
+button {
+    border: 1px solid var(--border);
+
+    background: var(--panel2);
+
+    color: var(--text);
+
+    border-radius: 10px;
+
+    padding: 10px 14px;
+
+    cursor: pointer;
+
+    transition:
+        transform .15s,
+        border-color .15s,
+        background .15s;
+}
+
+button:hover {
+    transform: translateY(-1px);
+
+    border-color: var(--cyan);
+
+    background: #171722;
+}
+
+button.primary {
+    background:
+        linear-gradient(
+            135deg,
+            rgba(0,255,255,.20),
+            rgba(157,78,221,.20)
+        );
+
+    border-color: var(--cyan);
+}
+
+button.danger {
+    border-color: var(--red);
+}
+
+.app {
+    display: grid;
+
+    grid-template-columns:
+        250px
+        minmax(0, 1fr);
+
+    min-height:
+        calc(100vh - 77px);
+}
+
+.sidebar {
+    border-right:
+        1px solid var(--border);
+
+    padding: 18px;
+
+    background:
+        rgba(10,10,16,.65);
+}
+
+.sidebar-section {
+    margin-bottom: 24px;
+}
+
+.sidebar-title {
+    color: var(--muted);
+
+    font-size: 11px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 1.4px;
+
+    margin-bottom: 8px;
+}
+
+.nav-button {
+    width: 100%;
+
+    text-align: left;
+
+    margin-bottom: 6px;
+}
+
+.nav-button.active {
+    border-color: var(--cyan);
+
+    background:
+        rgba(0,255,255,.08);
+}
+
+main {
+    min-width: 0;
+
+    padding: 20px;
+}
+
+.topbar {
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 15px;
+
+    margin-bottom: 15px;
+
+    flex-wrap: wrap;
+}
+
+.title h2 {
+    margin: 0 0 4px;
+
+    font-size: 24px;
+}
+
+.title p {
+    margin: 0;
+
+    color: var(--muted);
+}
+
+.actions {
+    display: flex;
+
+    gap: 8px;
+
+    flex-wrap: wrap;
+}
+
+.editor-layout {
+    display: grid;
+
+    grid-template-columns:
+        minmax(0, 1fr)
+        minmax(280px, 36%);
+
+    gap: 15px;
+}
+
+.panel {
+    background:
+        rgba(12,12,20,.88);
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 16px;
+
+    overflow: hidden;
+
+    box-shadow:
+        0 20px 60px rgba(0,0,0,.22);
+}
+
+.panel-header {
+    min-height: 48px;
+
+    padding: 10px 13px;
+
+    border-bottom:
+        1px solid var(--border);
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 10px;
+}
+
+.panel-header strong {
+    font-size: 13px;
+}
+
+.editor-wrap {
+    height:
+        calc(100vh - 225px);
+
+    min-height: 420px;
+}
+
+textarea {
+    width: 100%;
+    height: 100%;
+
+    resize: none;
+
+    border: 0;
+    outline: none;
+
+    padding: 18px;
+
+    background:
+        #07070d;
+
+    color:
+        #e9e9ff;
+
+    font-family:
+        "JetBrains Mono",
+        "Fira Code",
+        Consolas,
+        monospace;
+
+    font-size: 14px;
+
+    line-height: 1.6;
+
+    tab-size: 4;
+}
+
+.output {
+    height:
+        calc(100vh - 225px);
+
+    min-height: 420px;
+
+    overflow: auto;
+
+    padding: 18px;
+
+    background:
+        #050507;
+
+    font-family:
+        "JetBrains Mono",
+        Consolas,
+        monospace;
+
+    white-space: pre-wrap;
+
+    word-break: break-word;
+
+    color:
+        #d8d8e8;
+}
+
+.output.success {
+    color: var(--green);
+}
+
+.output.error {
+    color: var(--red);
+}
+
+.example-grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(auto-fill, minmax(220px, 1fr));
+
+    gap: 12px;
+
+    padding: 15px;
+}
+
+.example-card {
+    border:
+        1px solid var(--border);
+
+    border-radius: 14px;
+
+    padding: 15px;
+
+    background:
+        rgba(255,255,255,.02);
+}
+
+.example-card h3 {
+    margin:
+        0 0 7px;
+
+    font-size: 14px;
+}
+
+.example-card p {
+    color: var(--muted);
+
+    font-size: 12px;
+
+    min-height: 35px;
+}
+
+.example-card button {
+    width: 100%;
+}
+
+.package-box {
+    padding: 15px;
+}
+
+.package-row {
+    display: flex;
+
+    gap: 8px;
+}
+
+.package-row input {
+    flex: 1;
+}
+
+.package-output {
+    margin-top: 12px;
+
+    padding: 12px;
+
+    min-height: 80px;
+
+    background: #050507;
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 10px;
+
+    white-space: pre-wrap;
+
+    font-family: monospace;
+
+    font-size: 12px;
+}
+
+.playground-list {
+    padding: 15px;
+
+    display: grid;
+
+    gap: 10px;
+}
+
+.playground {
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 10px;
+
+    padding: 12px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    border:
+        1px solid var(--border);
+
+    border-radius: 12px;
+}
+
+.playground-info strong {
+    display: block;
+}
+
+.playground-info span {
+    color: var(--muted);
+
+    font-size: 12px;
+}
+
+.playground-actions {
+    display: flex;
+
+    gap: 6px;
+}
+
+.status {
+    color: var(--muted);
+
+    font-size: 12px;
+}
+
+.badge {
+    padding: 4px 8px;
+
+    border-radius: 999px;
+
+    border:
+        1px solid var(--border);
+
+    font-size: 11px;
+
+    color: var(--cyan);
+}
+
+.empty {
+    padding: 30px;
+
     text-align: center;
+
+    color: var(--muted);
 }
-h1 { color: #c084fc; }
-button { padding: 15px; border-radius: 10px; }</textarea><br><button class="small-button" onclick="runCSS()">▶ Preview</button><br><br><iframe id="cssPreview" class="preview" sandbox></iframe></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
 
-<div id="javascript" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">⚡</div><h2>JavaScript</h2><p>Add logic and interaction.</p></div>
-<div class="lesson"><h3>Variables</h3><pre>let name = "Neon";
-console.log(name);</pre></div>
-<div class="lesson"><h3>⚡ JavaScript Playground</h3><textarea id="jsCode" class="editor" spellcheck="false">let x = 10;
-let y = 20;
-console.log("Result:", x + y);</textarea><br><button class="small-button" onclick="runJS()">▶ Run</button><br><br><pre id="jsOutput" class="output">Ready.</pre></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+@media(max-width: 900px) {
 
-<div id="java" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">☕</div><h2>Java</h2><p>Object-oriented programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>public class Main {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
+    .app {
+        grid-template-columns: 1fr;
     }
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Java</span></div><div class="terminal-body">$ javac Main.java
-$ java Main
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
 
-<div id="c" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">💻</div><h2>C</h2><p>Learn the foundations of programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>#include &lt;stdio.h&gt;
-int main() {
-    printf("Hello, World!");
-    return 0;
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">C</span></div><div class="terminal-body">$ gcc main.c -o main
-$ ./main
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+    .sidebar {
+        border-right: 0;
 
-<div id="cpp" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🔷</div><h2>C++</h2><p>Powerful application and game programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>#include &lt;iostream&gt;
-int main() {
-    std::cout &lt;&lt; "Hello, World!";
-    return 0;
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">C++</span></div><div class="terminal-body">$ g++ main.cpp -o main
-$ ./main
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+        border-bottom:
+            1px solid var(--border);
 
-<div id="csharp" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🟣</div><h2>C#</h2><p>.NET and game development.</p></div><div class="lesson"><h3>Hello World</h3><pre>using System;
-class Program {
-    static void Main() {
-        Console.WriteLine("Hello, World!");
+        display: flex;
+
+        gap: 8px;
+
+        overflow-x: auto;
     }
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">C#</span></div><div class="terminal-body">$ dotnet run
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
 
-<div id="rust" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🦀</div><h2>Rust</h2><p>Fast and memory-safe programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>fn main() {
-    println!("Hello, World!");
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Rust</span></div><div class="terminal-body">$ rustc main.rs
-$ ./main
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+    .sidebar-section {
+        min-width: 180px;
 
-<div id="php" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🐘</div><h2>PHP</h2><p>Server-side web programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>&lt;?php
-echo "Hello, World!";
-?&gt;</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">PHP</span></div><div class="terminal-body">$ php main.php
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+        margin: 0;
+    }
 
-<div id="ruby" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">💎</div><h2>Ruby</h2><p>Readable and expressive programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>puts "Hello, World!"</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Ruby</span></div><div class="terminal-body">$ ruby main.rb
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+    .editor-layout {
+        grid-template-columns: 1fr;
+    }
 
-<div id="go" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🐹</div><h2>Go</h2><p>Simple and fast backend programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>package main
-import "fmt"
-func main() {
-    fmt.Println("Hello, World!")
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Go</span></div><div class="terminal-body">$ go run main.go
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+    .editor-wrap,
+    .output {
+        height: 500px;
+    }
+}
 
-<div id="kotlin" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🦫</div><h2>Kotlin</h2><p>Modern JVM programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>fun main() {
-    println("Hello, World!")
-}</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Kotlin</span></div><div class="terminal-body">$ kotlinc main.kt -include-runtime -d main.jar
-$ java -jar main.jar
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+</style>
 
-<div id="swift" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🐦</div><h2>Swift</h2><p>Apple platform programming.</p></div><div class="lesson"><h3>Hello World</h3><pre>print("Hello, World!")</pre></div><div class="lesson"><h3>💻 Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">Swift</span></div><div class="terminal-body">$ swift main.swift
-Hello, World!</div></div></div><button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+</head>
 
-<div id="sql" class="screen"><div class="tutorial"><div class="tutorial-header"><div class="tutorial-icon">🗄️</div><h2>SQL</h2><p>Learn databases and queries.</p></div>
-<div class="lesson"><h3>🗄️ SQLite Playground</h3><textarea id="sqlCode" class="editor" spellcheck="false">CREATE TABLE users (
-    id INTEGER,
-    name TEXT,
-    age INTEGER
-);
-INSERT INTO users VALUES
-(1, 'Alex', 15),
-(2, 'Sam', 20);
-SELECT * FROM users;</textarea><br><button class="small-button" onclick="runSQL()">▶ Run SQL</button><br><br><pre id="sqlOutput" class="output">Ready.</pre></div>
-<div class="lesson"><h3>💻 SQLite Terminal</h3><div class="terminal"><div class="terminal-top"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span><span class="terminal-title">SQLite</span></div><div class="terminal-body">sqlite&gt; SELECT 1 + 1;
-2</div></div></div>
-<button class="button" onclick="showScreen('languages')">← Back to Languages</button></div></div>
+<body>
+
+<header>
+
+    <div class="logo">
+
+        <div class="logo-icon">
+            &lt;/&gt;
+        </div>
+
+        <div>
+            <h1 id="brand">
+                NEON PROGRAMMING HUB
+            </h1>
+
+            <span id="subtitle">
+                Code. Experiment. Build.
+            </span>
+        </div>
+
+    </div>
+
+    <div class="header-controls">
+
+        <select id="languageSelect"
+                onchange="changeUILanguage()">
+
+            <option value="en">
+                🇬🇧 English
+            </option>
+
+            <option value="de">
+                🇩🇪 Deutsch
+            </option>
+
+        </select>
+
+    </div>
+
+</header>
+
+
+<div class="app">
+
+<aside class="sidebar">
+
+    <div class="sidebar-section">
+
+        <div class="sidebar-title">
+            Workspace
+        </div>
+
+        <button
+            class="nav-button active"
+            onclick="showPage('editor')"
+            id="navEditor">
+            💻 Editor
+        </button>
+
+        <button
+            class="nav-button"
+            onclick="showPage('examples')"
+            id="navExamples">
+            📚 Examples
+        </button>
+
+        <button
+            class="nav-button"
+            onclick="showPage('playgrounds')"
+            id="navPlaygrounds">
+            🧪 Playgrounds
+        </button>
+
+        <button
+            class="nav-button"
+            onclick="showPage('packages')"
+            id="navPackages">
+            📦 Packages
+        </button>
+
+    </div>
+
+</aside>
+
+
+<main>
+
+<!-- ======================================================
+     EDITOR
+====================================================== -->
+
+<section id="page-editor">
+
+    <div class="topbar">
+
+        <div class="title">
+
+            <h2 id="editorTitle">
+                Python Playground
+            </h2>
+
+            <p id="status">
+                Ready.
+            </p>
+
+        </div>
+
+        <div class="actions">
+
+            <select id="language"
+                    onchange="changeLanguage()">
+
+                <option value="python">
+                    Python
+                </option>
+
+                <option value="html">
+                    HTML
+                </option>
+
+                <option value="css">
+                    CSS
+                </option>
+
+                <option value="javascript">
+                    JavaScript
+                </option>
+
+                <option value="sql">
+                    SQL
+                </option>
+
+            </select>
+
+            <button onclick="clearEditor()">
+                🗑 Clear
+            </button>
+
+            <button onclick="copyCode()">
+                📋 Copy
+            </button>
+
+            <button
+                class="primary"
+                onclick="runCode()">
+
+                ▶ Run
+
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <div class="editor-layout">
+
+        <div class="panel">
+
+            <div class="panel-header">
+
+                <strong>
+                    Code
+                </strong>
+
+                <span class="badge"
+                      id="languageBadge">
+                    Python
+                </span>
+
+            </div>
+
+            <div class="editor-wrap">
+
+                <textarea
+                    id="editor"
+                    spellcheck="false"></textarea>
+
+            </div>
+
+        </div>
+
+
+        <div class="panel">
+
+            <div class="panel-header">
+
+                <strong id="outputTitle">
+                    Output
+                </strong>
+
+                <span class="status">
+                    Console
+                </span>
+
+            </div>
+
+            <div
+                id="output"
+                class="output">
+
+                Ready.
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- ======================================================
+     EXAMPLES
+====================================================== -->
+
+<section id="page-examples"
+         style="display:none;">
+
+    <div class="topbar">
+
+        <div class="title">
+
+            <h2 id="examplesTitle">
+                Examples
+            </h2>
+
+            <p>
+                Ready-to-use code examples.
+            </p>
+
+        </div>
+
+        <select
+            id="exampleLanguage"
+            onchange="renderExamples()">
+
+            <option value="python">
+                Python
+            </option>
+
+            <option value="html">
+                HTML
+            </option>
+
+            <option value="css">
+                CSS
+            </option>
+
+            <option value="javascript">
+                JavaScript
+            </option>
+
+            <option value="sql">
+                SQL
+            </option>
+
+        </select>
+
+    </div>
+
+
+    <div class="panel">
+
+        <div
+            id="exampleGrid"
+            class="example-grid">
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- ======================================================
+     PLAYGROUNDS
+====================================================== -->
+
+<section id="page-playgrounds"
+         style="display:none;">
+
+    <div class="topbar">
+
+        <div class="title">
+
+            <h2>
+                Playgrounds
+            </h2>
+
+            <p>
+                Save your own coding projects.
+            </p>
+
+        </div>
+
+        <button
+            class="primary"
+            onclick="newPlayground()">
+
+            ➕ New Playground
+
+        </button>
+
+    </div>
+
+
+    <div class="panel">
+
+        <div
+            id="playgroundList"
+            class="playground-list">
+
+            Loading...
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- ======================================================
+     PACKAGES
+====================================================== -->
+
+<section id="page-packages"
+         style="display:none;">
+
+    <div class="topbar">
+
+        <div class="title">
+
+            <h2>
+                Packages
+            </h2>
+
+            <p>
+                Install packages from PyPI.
+            </p>
+
+        </div>
+
+    </div>
+
+
+    <div class="panel">
+
+        <div class="package-box">
+
+            <div class="sidebar-title">
+                Package name
+            </div>
+
+            <div class="package-row">
+
+                <input
+                    id="packageInput"
+                    placeholder="requests">
+
+                <button
+                    class="primary"
+                    onclick="installPackage()">
+
+                    📦 Install
+
+                </button>
+
+            </div>
+
+            <p class="status">
+                Any package available on PyPI can be entered.
+                Examples: requests, flask, rich, numpy, pillow
+            </p>
+
+            <div
+                id="packageOutput"
+                class="package-output">
+
+                Ready.
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+</main>
+
+</div>
+
 
 <script>
-function showScreen(id){
-    document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
-    const selected=document.getElementById(id);
-    if(selected){selected.classList.add("active");selected.scrollTop=0;}
+
+const examples = """ + json.dumps(EXAMPLES) + r""";
+
+const translations = """ + json.dumps(TRANSLATIONS) + r""";
+
+let currentUILanguage = "en";
+
+let currentLanguage = "python";
+
+
+// ========================================================
+// LANGUAGE
+// ========================================================
+
+function changeUILanguage() {
+
+    currentUILanguage =
+        document.getElementById(
+            "languageSelect"
+        ).value;
+
+    const t =
+        translations[currentUILanguage];
+
+    document.getElementById("brand").textContent =
+        t.brand;
+
+    document.getElementById("subtitle").textContent =
+        t.subtitle;
+
+    document.getElementById("outputTitle").textContent =
+        t.output;
+
+    document.getElementById("status").textContent =
+        t.ready;
+
+    document.querySelectorAll(
+        "button"
+    ).forEach(button => {
+
+        const text =
+            button.textContent.trim();
+
+        if (text.includes("Run") ||
+            text.includes("Ausführen")) {
+
+            button.textContent =
+                t.run;
+
+        }
+
+    });
+
 }
-async function runPython(){
-    const code=document.getElementById("pythonCode").value;
-    const output=document.getElementById("pythonOutput");
-    output.textContent="Running...";
-    try{
-        const response=await fetch("/api/python/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
-        const data=await response.json();
-        output.textContent=data.output||data.error||"(no output)";
-    }catch(error){output.textContent="Connection error: "+error;}
+
+
+// ========================================================
+// PAGE NAVIGATION
+// ========================================================
+
+function showPage(page) {
+
+    const pages = [
+        "editor",
+        "examples",
+        "playgrounds",
+        "packages"
+    ];
+
+    pages.forEach(name => {
+
+        const element =
+            document.getElementById(
+                "page-" + name
+            );
+
+        if (element) {
+            element.style.display =
+                name === page
+                    ? "block"
+                    : "none";
+        }
+
+    });
+
+    if (page === "examples") {
+        renderExamples();
+    }
+
+    if (page === "playgrounds") {
+        loadPlaygrounds();
+    }
+
 }
-function clearPython(){document.getElementById("pythonCode").value="";document.getElementById("pythonOutput").textContent="Ready."}
-function runHTML(){document.getElementById("htmlPreview").srcdoc=document.getElementById("htmlCode").value}
-function runCSS(){
-    const css=document.getElementById("cssCode").value;
-    document.getElementById("cssPreview").srcdoc="<!doctype html><html><head><style>"+css+"</style></head><body><h1>Neon CSS Playground</h1><p>Change the CSS and preview it.</p><button>Test Button</button></body></html>";
+
+
+// ========================================================
+// LANGUAGE / EDITOR
+// ========================================================
+
+function changeLanguage() {
+
+    currentLanguage =
+        document.getElementById(
+            "language"
+        ).value;
+
+    document.getElementById(
+        "languageBadge"
+    ).textContent =
+        currentLanguage;
+
+    document.getElementById(
+        "editorTitle"
+    ).textContent =
+        currentLanguage.charAt(0).toUpperCase()
+        + currentLanguage.slice(1)
+        + " Playground";
+
+    const list =
+        examples[currentLanguage];
+
+    if (list && list.length > 0) {
+
+        document.getElementById(
+            "editor"
+        ).value =
+            list[0].code;
+
+    }
+
+    document.getElementById(
+        "status"
+    ).textContent =
+        "Example loaded.";
+
 }
-function runJS(){
-    const code=document.getElementById("jsCode").value,output=document.getElementById("jsOutput"),lines=[];
-    try{
-        const originalLog=console.log;
-        console.log=function(){lines.push(Array.from(arguments).join(" "))};
-        const result=Function(code)();
-        console.log=originalLog;
-        if(result!==undefined)lines.push(String(result));
-        output.textContent=lines.join("\\n")||"(no output)";
-    }catch(error){console.log=console.log;output.textContent=String(error)}
+
+
+// ========================================================
+// EXAMPLES
+// ========================================================
+
+function renderExamples() {
+
+    const language =
+        document.getElementById(
+            "exampleLanguage"
+        ).value;
+
+    const grid =
+        document.getElementById(
+            "exampleGrid"
+        );
+
+    grid.innerHTML = "";
+
+    const list =
+        examples[language] || [];
+
+    list.forEach((example, index) => {
+
+        const card =
+            document.createElement(
+                "div"
+            );
+
+        card.className =
+            "example-card";
+
+        const title =
+            document.createElement(
+                "h3"
+            );
+
+        title.textContent =
+            example.name;
+
+        const description =
+            document.createElement(
+                "p"
+            );
+
+        description.textContent =
+            "Ready-to-use " +
+            language +
+            " example.";
+
+        const button =
+            document.createElement(
+                "button"
+            );
+
+        button.textContent =
+            "Load Example";
+
+        button.onclick =
+            function() {
+
+                document.getElementById(
+                    "language"
+                ).value =
+                    language;
+
+                currentLanguage =
+                    language;
+
+                document.getElementById(
+                    "languageBadge"
+                ).textContent =
+                    language;
+
+                document.getElementById(
+                    "editor"
+                ).value =
+                    example.code;
+
+                showPage("editor");
+
+            };
+
+        card.appendChild(title);
+
+        card.appendChild(description);
+
+        card.appendChild(button);
+
+        grid.appendChild(card);
+
+    });
+
 }
-async function runSQL(){
-    const sql=document.getElementById("sqlCode").value,output=document.getElementById("sqlOutput");
-    output.textContent="Running...";
-    try{
-        const response=await fetch("/api/sql/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql})});
-        const data=await response.json();
-        output.textContent=data.output||data.error||"(no output)";
-    }catch(error){output.textContent="Connection error: "+error}
+
+
+// ========================================================
+// RUN
+// ========================================================
+
+async function runCode() {
+
+    const code =
+        document.getElementById(
+            "editor"
+        ).value;
+
+    const output =
+        document.getElementById(
+            "output"
+        );
+
+    const status =
+        document.getElementById(
+            "status"
+        );
+
+    if (!code.trim()) {
+
+        output.textContent =
+            "No code entered.";
+
+        output.className =
+            "output error";
+
+        return;
+
+    }
+
+    output.className =
+        "output";
+
+    output.textContent =
+        "Running...";
+
+    status.textContent =
+        "Running...";
+
+
+    try {
+
+        let endpoint = null;
+
+        if (currentLanguage === "python") {
+
+            endpoint =
+                "/api/python/run";
+
+        } else if (
+            currentLanguage === "sql"
+        ) {
+
+            endpoint =
+                "/api/sql/run";
+
+        } else {
+
+            /*
+             * HTML/CSS/JS aren't executed
+             * on the server.
+             *
+             * We show the source in the
+             * output panel instead.
+             */
+
+            output.textContent =
+                code;
+
+            status.textContent =
+                "Ready.";
+
+            return;
+
+        }
+
+
+        const response =
+            await fetch(
+                endpoint,
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        code: code
+                    })
+                }
+            );
+
+
+        const data =
+            await response.json();
+
+
+        output.textContent =
+            data.output ||
+            "No output.";
+
+        output.className =
+            data.success
+                ? "output success"
+                : "output error";
+
+        status.textContent =
+            data.success
+                ? "Finished."
+                : "Error.";
+
+    }
+
+    catch (error) {
+
+        output.textContent =
+            String(error);
+
+        output.className =
+            "output error";
+
+        status.textContent =
+            "Error.";
+
+    }
+
 }
+
+
+// ========================================================
+// CLEAR
+// ========================================================
+
+function clearEditor() {
+
+    document.getElementById(
+        "editor"
+    ).value = "";
+
+    document.getElementById(
+        "output"
+    ).textContent =
+        "Ready.";
+
+    document.getElementById(
+        "status"
+    ).textContent =
+        "Ready.";
+
+}
+
+
+// ========================================================
+// COPY
+// ========================================================
+
+async function copyCode() {
+
+    const code =
+        document.getElementById(
+            "editor"
+        ).value;
+
+    await navigator.clipboard.writeText(
+        code
+    );
+
+    document.getElementById(
+        "status"
+    ).textContent =
+        "Copied.";
+
+}
+
+
+// ========================================================
+// PACKAGES
+// ========================================================
+
+async function installPackage() {
+
+    const packageName =
+        document.getElementById(
+            "packageInput"
+        ).value.trim();
+
+    const output =
+        document.getElementById(
+            "packageOutput"
+        );
+
+    if (!packageName) {
+
+        output.textContent =
+            "Enter a package name.";
+
+        return;
+
+    }
+
+    output.textContent =
+        "Installing " +
+        packageName +
+        "...";
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/python/install",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        package:
+                            packageName
+                    })
+                }
+            );
+
+
+        const data =
+            await response.json();
+
+        output.textContent =
+            data.output ||
+            "Finished.";
+
+    }
+
+    catch (error) {
+
+        output.textContent =
+            String(error);
+
+    }
+
+}
+
+
+// ========================================================
+// PLAYGROUNDS
+// ========================================================
+
+async function loadPlaygrounds() {
+
+    const container =
+        document.getElementById(
+            "playgroundList"
+        );
+
+    container.textContent =
+        "Loading...";
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/playgrounds"
+            );
+
+        const list =
+            await response.json();
+
+        container.innerHTML = "";
+
+
+        if (!list.length) {
+
+            const empty =
+                document.createElement(
+                    "div"
+                );
+
+            empty.className =
+                "empty";
+
+            empty.textContent =
+                "No saved playgrounds yet.";
+
+            container.appendChild(
+                empty
+            );
+
+            return;
+        }
+
+
+        list.forEach(item => {
+
+            const row =
+                document.createElement(
+                    "div"
+                );
+
+            row.className =
+                "playground";
+
+
+            const info =
+                document.createElement(
+                    "div"
+                );
+
+            info.className =
+                "playground-info";
+
+
+            const strong =
+                document.createElement(
+                    "strong"
+                );
+
+            strong.textContent =
+                item.name;
+
+
+            const span =
+                document.createElement(
+                    "span"
+                );
+
+            span.textContent =
+                item.language;
+
+
+            info.appendChild(
+                strong
+            );
+
+            info.appendChild(
+                span
+            );
+
+
+            const actions =
+                document.createElement(
+                    "div"
+                );
+
+            actions.className =
+                "playground-actions";
+
+
+            const open =
+                document.createElement(
+                    "button"
+                );
+
+            open.textContent =
+                "Open";
+
+            open.onclick =
+                function() {
+
+                    document.getElementById(
+                        "language"
+                    ).value =
+                        item.language;
+
+                    currentLanguage =
+                        item.language;
+
+                    document.getElementById(
+                        "languageBadge"
+                    ).textContent =
+                        item.language;
+
+                    document.getElementById(
+                        "editor"
+                    ).value =
+                        item.code;
+
+                    showPage("editor");
+
+                };
+
+
+            const remove =
+                document.createElement(
+                    "button"
+                );
+
+            remove.textContent =
+                "Delete";
+
+            remove.className =
+                "danger";
+
+            remove.onclick =
+                function() {
+
+                    deletePlayground(
+                        item.id
+                    );
+
+                };
+
+
+            actions.appendChild(
+                open
+            );
+
+            actions.appendChild(
+                remove
+            );
+
+
+            row.appendChild(
+                info
+            );
+
+            row.appendChild(
+                actions
+            );
+
+            container.appendChild(
+                row
+            );
+
+        });
+
+    }
+
+    catch (error) {
+
+        container.textContent =
+            String(error);
+
+    }
+
+}
+
+
+// ========================================================
+// NEW PLAYGROUND
+// ========================================================
+
+async function newPlayground() {
+
+    const name =
+        prompt(
+            "Playground name:"
+        );
+
+    if (!name) {
+        return;
+    }
+
+    const language =
+        document.getElementById(
+            "language"
+        ).value;
+
+    const code =
+        document.getElementById(
+            "editor"
+        ).value;
+
+
+    try {
+
+        await fetch(
+            "/api/playgrounds",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body: JSON.stringify({
+                    name: name,
+                    language: language,
+                    code: code
+                })
+            }
+        );
+
+        loadPlaygrounds();
+
+    }
+
+    catch (error) {
+
+        alert(String(error));
+
+    }
+
+}
+
+
+// ========================================================
+// DELETE PLAYGROUND
+// ========================================================
+
+async function deletePlayground(id) {
+
+    if (!confirm(
+        "Delete this playground?"
+    )) {
+        return;
+    }
+
+    await fetch(
+        "/api/playgrounds/" + id,
+        {
+            method: "DELETE"
+        }
+    );
+
+    loadPlaygrounds();
+
+}
+
+
+// ========================================================
+// TAB SUPPORT
+// ========================================================
+
+document.getElementById(
+    "editor"
+).addEventListener(
+    "keydown",
+    function(event) {
+
+        if (event.key === "Tab") {
+
+            event.preventDefault();
+
+            const start =
+                this.selectionStart;
+
+            const end =
+                this.selectionEnd;
+
+            this.value =
+                this.value.substring(
+                    0,
+                    start
+                )
+                +
+                "    "
+                +
+                this.value.substring(
+                    end
+                );
+
+            this.selectionStart =
+                this.selectionEnd =
+                    start + 4;
+
+        }
+
+    }
+);
+
+
+// ========================================================
+// STARTUP
+// ========================================================
+
+document.getElementById(
+    "editor"
+).value =
+    examples.python[0].code;
+
+renderExamples();
+
 </script>
+
 </body>
 </html>
 """
 
 
 # ============================================================
-# SAFE PYTHON PLAYGROUND
-# ============================================================
-
-SAFE_BUILTINS = {
-    "print": print,
-    "len": len,
-    "range": range,
-    "str": str,
-    "int": int,
-    "float": float,
-    "bool": bool,
-    "list": list,
-    "tuple": tuple,
-    "dict": dict,
-    "set": set,
-    "sum": sum,
-    "min": min,
-    "max": max,
-    "abs": abs,
-    "round": round,
-    "enumerate": enumerate,
-    "zip": zip,
-    "sorted": sorted,
-    "reversed": reversed,
-}
-
-ALLOWED_NODES = {
-    ast.Module,
-    ast.Expr,
-    ast.Assign,
-    ast.AnnAssign,
-    ast.AugAssign,
-    ast.Name,
-    ast.Constant,
-    ast.List,
-    ast.Tuple,
-    ast.Dict,
-    ast.Set,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.BoolOp,
-    ast.Compare,
-    ast.If,
-    ast.For,
-    ast.While,
-    ast.Break,
-    ast.Continue,
-    ast.Pass,
-    ast.Call,
-    ast.keyword,
-    ast.Subscript,
-    ast.Slice,
-    ast.ListComp,
-    ast.DictComp,
-    ast.SetComp,
-    ast.comprehension,
-    ast.Load,
-    ast.Store,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.FloorDiv,
-    ast.Mod,
-    ast.Pow,
-    ast.USub,
-    ast.UAdd,
-    ast.Not,
-    ast.And,
-    ast.Or,
-    ast.Eq,
-    ast.NotEq,
-    ast.Lt,
-    ast.LtE,
-    ast.Gt,
-    ast.GtE,
-    ast.In,
-    ast.NotIn,
-    ast.Is,
-    ast.IsNot,
-    ast.IfExp,
-}
-
-BLOCKED_NAMES = {
-    "__import__",
-    "eval",
-    "exec",
-    "compile",
-    "open",
-    "input",
-    "globals",
-    "locals",
-    "vars",
-    "dir",
-    "getattr",
-    "setattr",
-    "delattr",
-    "breakpoint",
-    "__builtins__",
-    "__file__",
-    "__name__",
-}
-
-BLOCKED_ATTRIBUTES = {
-    "__class__",
-    "__bases__",
-    "__subclasses__",
-    "__globals__",
-    "__code__",
-    "__builtins__",
-    "__mro__",
-}
-
-
-def validate_python_tree(tree):
-    for node in ast.walk(tree):
-        if type(node) not in ALLOWED_NODES:
-            raise ValueError(
-                f"Python feature not allowed: {type(node).__name__}"
-            )
-
-        if isinstance(node, ast.Name):
-            if node.id in BLOCKED_NAMES or node.id.startswith("__"):
-                raise ValueError(f"Name not allowed: {node.id}")
-
-        if isinstance(node, ast.Attribute):
-            if node.attr in BLOCKED_ATTRIBUTES or node.attr.startswith("__"):
-                raise ValueError(f"Attribute not allowed: {node.attr}")
-
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id not in SAFE_BUILTINS:
-                    raise ValueError(
-                        f"Function not allowed: {node.func.id}"
-                    )
-            elif isinstance(node.func, ast.Attribute):
-                raise ValueError("Attribute calls are not allowed.")
-            else:
-                raise ValueError("This type of function call is not allowed.")
-
-
-def execute_safe_python(code):
-    tree = ast.parse(code, mode="exec")
-    validate_python_tree(tree)
-
-    namespace = {
-        "__builtins__": SAFE_BUILTINS
-    }
-
-    output_buffer = io.StringIO()
-
-    with contextlib.redirect_stdout(output_buffer):
-        exec(compile(tree, "<neon-python>", "exec"), namespace, namespace)
-
-    output = output_buffer.getvalue()
-
-    if len(output) > MAX_OUTPUT_SIZE:
-        output = output[:MAX_OUTPUT_SIZE] + "\n...[output truncated]"
-
-    return output
-
-
-# ============================================================
-# ROUTES
-# ============================================================
-
-@app.route("/")
-def home():
-    return render_template_string(HTML)
-
-
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "ok",
-        "service": "Neon Programming Hub"
-    })
-
-
-@app.route("/api/python/run", methods=["POST"])
-def api_python_run():
-    data = request.get_json(silent=True) or {}
-    code = data.get("code", "")
-
-    if not isinstance(code, str):
-        return jsonify({"error": "Invalid code."}), 400
-
-    if len(code) > MAX_CODE_SIZE:
-        return jsonify({
-            "error": "Code is too large."
-        }), 400
-
-    if not code.strip():
-        return jsonify({"output": "(no code)"}), 200
-
-    try:
-        output = execute_safe_python(code)
-
-        return jsonify({
-            "output": output or "(no output)"
-        })
-
-    except SyntaxError as error:
-        return jsonify({
-            "error": f"SyntaxError: {error}"
-        }), 400
-
-    except Exception as error:
-        return jsonify({
-            "error": f"{type(error).__name__}: {error}"
-        }), 400
-
-
-@app.route("/api/python/install", methods=["POST"])
-def api_python_install():
-    # Dynamic pip installation is intentionally disabled on Render.
-    # Render dependencies belong in requirements.txt.
-    return jsonify({
-        "error": (
-            "Dynamic package installation is disabled on Render. "
-            "Add the package to requirements.txt and redeploy."
-        ),
-        "available_packages": sorted(ALLOWED_PACKAGES)
-    }), 400
-
-
-@app.route("/api/sql/run", methods=["POST"])
-def api_sql_run():
-    data = request.get_json(silent=True) or {}
-    sql = data.get("sql", "")
-
-    if not isinstance(sql, str):
-        return jsonify({"error": "Invalid SQL."}), 400
-
-    if len(sql) > MAX_SQL_SIZE:
-        return jsonify({"error": "SQL is too large."}), 400
-
-    connection = None
-
-    try:
-        connection = sqlite3.connect(":memory:")
-        cursor = connection.cursor()
-
-        # Split simple playground statements.
-        # This is intended for educational SQL, not production SQL parsing.
-        statements = [
-            statement.strip()
-            for statement in sql.split(";")
-            if statement.strip()
-        ]
-
-        output_lines = []
-
-        for statement in statements:
-            cursor.execute(statement)
-
-            if cursor.description:
-                columns = [
-                    column[0]
-                    for column in cursor.description
-                ]
-
-                output_lines.append(" | ".join(columns))
-                output_lines.append("-" * 40)
-
-                for row in cursor.fetchall():
-                    output_lines.append(
-                        " | ".join(str(value) for value in row)
-                    )
-            else:
-                output_lines.append("OK")
-
-        connection.commit()
-
-        output = "\n".join(output_lines)
-
-        if len(output) > MAX_OUTPUT_SIZE:
-            output = output[:MAX_OUTPUT_SIZE] + "\n...[output truncated]"
-
-        return jsonify({
-            "output": output or "(no output)"
-        })
-
-    except Exception as error:
-        return jsonify({
-            "error": "SQL error: " + str(error)
-        }), 400
-
-    finally:
-        if connection is not None:
-            connection.close()
-
-
-# ============================================================
-# RENDER STARTUP
+# RENDER START
 # ============================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
 
-    print("==========================================")
-    print("          NEON PROGRAMMING HUB")
-    print("==========================================")
-    print(f"Starting on port {port}")
-    print("Health endpoint: /health")
-    print("==========================================")
+    print("=" * 60)
+    print("NEON PROGRAMMING HUB")
+    print("=" * 60)
+    print(f"Server: http://0.0.0.0:{PORT}")
+    print("Render mode enabled.")
+    print("No artificial code-size limit enabled.")
+    print("=" * 60)
 
     app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False
-    )
+        host=HOST,
+        port=PORT,
+        debug=False,
+        threaded=True
+            )
