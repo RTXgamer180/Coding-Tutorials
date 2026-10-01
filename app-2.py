@@ -5,8 +5,6 @@ import time
 import sqlite3
 import subprocess
 import tempfile
-import threading
-from pathlib import Path
 
 from flask import Flask, request, jsonify, render_template_string
 
@@ -18,19 +16,21 @@ from flask import Flask, request, jsonify, render_template_string
 app = Flask(__name__)
 
 # No artificial application code-size limit.
-# Real server/browser/memory limits still apply.
+# Real browser/server/memory limits still apply.
 app.config["MAX_CONTENT_LENGTH"] = None
 
 PORT = int(os.environ.get("PORT", "5000"))
 HOST = "0.0.0.0"
 
 PYTHON_TIMEOUT = 60
-SQL_TIMEOUT = 30
 PIP_TIMEOUT = 180
 
 DB_FILE = os.environ.get(
     "NEON_DB",
-    os.path.join(tempfile.gettempdir(), "neon_programming_hub.db")
+    os.path.join(
+        tempfile.gettempdir(),
+        "neon_programming_hub.db"
+    )
 )
 
 
@@ -38,8 +38,12 @@ DB_FILE = os.environ.get(
 # DATABASE
 # ============================================================
 
+def get_db():
+    return sqlite3.connect(DB_FILE)
+
+
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS playgrounds (
@@ -66,71 +70,101 @@ TRANSLATIONS = {
     "en": {
         "brand": "NEON PROGRAMMING HUB",
         "subtitle": "Code. Experiment. Build.",
-        "run": "▶ Run",
-        "clear": "Clear",
-        "copy": "Copy",
+        "workspace": "Workspace",
+        "editor": "Editor",
         "examples": "Examples",
         "playgrounds": "Playgrounds",
         "packages": "Packages",
-        "install": "Install Package",
-        "language": "Language",
+        "run": "▶ Run",
+        "clear": "🗑 Clear",
+        "copy": "📋 Copy",
+        "code": "Code",
         "output": "Output",
+        "console": "Console",
+        "ready": "Ready.",
+        "running": "Running...",
+        "finished": "Finished.",
+        "error": "Error.",
+        "copied": "Copied.",
+        "example_loaded": "Example loaded.",
+        "no_code": "No code entered.",
+        "load": "Load Example",
+        "load_playground": "Open",
+        "delete": "Delete",
+        "new_playground": "➕ New Playground",
+        "save": "Save",
+        "package_name": "Package name",
+        "install": "📦 Install",
+        "package_help": "Install packages directly from PyPI.",
+        "ready_packages": "Ready.",
+        "loading": "Loading...",
+        "no_playgrounds": "No saved playgrounds yet.",
+        "playground_name": "Playground name:",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "language": "Language",
+        "description": "Ready-to-use code example.",
+        "html_preview": "HTML Preview",
+        "css_preview": "CSS Preview",
+        "javascript_output": "JavaScript output",
         "python": "Python",
         "html": "HTML",
         "css": "CSS",
         "javascript": "JavaScript",
         "sql": "SQL",
-        "new_playground": "New Playground",
-        "save": "Save",
-        "delete": "Delete",
-        "package_name": "Package name",
-        "package_help": "Install any package available from PyPI.",
-        "ready": "Ready.",
-        "running": "Running...",
-        "saved": "Saved.",
-        "deleted": "Deleted.",
-        "loading": "Loading...",
-        "error": "Error",
-        "welcome": "Welcome to Neon Programming Hub!",
-        "example_loaded": "Example loaded.",
-        "no_code": "No code entered.",
-        "select_language": "Select a language",
-        "name": "Name",
+        "json": "JSON",
+        "bash": "Bash",
+        "markdown": "Markdown",
     },
 
     "de": {
         "brand": "NEON PROGRAMMING HUB",
         "subtitle": "Programmieren. Experimentieren. Bauen.",
-        "run": "▶ Ausführen",
-        "clear": "Leeren",
-        "copy": "Kopieren",
+        "workspace": "Arbeitsbereich",
+        "editor": "Editor",
         "examples": "Beispiele",
         "playgrounds": "Playgrounds",
         "packages": "Pakete",
-        "install": "Paket installieren",
-        "language": "Sprache",
+        "run": "▶ Ausführen",
+        "clear": "🗑 Leeren",
+        "copy": "📋 Kopieren",
+        "code": "Code",
         "output": "Ausgabe",
+        "console": "Konsole",
+        "ready": "Bereit.",
+        "running": "Wird ausgeführt...",
+        "finished": "Fertig.",
+        "error": "Fehler.",
+        "copied": "Kopiert.",
+        "example_loaded": "Beispiel geladen.",
+        "no_code": "Kein Code eingegeben.",
+        "load": "Beispiel laden",
+        "load_playground": "Öffnen",
+        "delete": "Löschen",
+        "new_playground": "➕ Neuer Playground",
+        "save": "Speichern",
+        "package_name": "Paketname",
+        "install": "📦 Installieren",
+        "package_help": "Pakete direkt von PyPI installieren.",
+        "ready_packages": "Bereit.",
+        "loading": "Lädt...",
+        "no_playgrounds": "Noch keine gespeicherten Playgrounds.",
+        "playground_name": "Name des Playgrounds:",
+        "saved": "Gespeichert.",
+        "deleted": "Gelöscht.",
+        "language": "Sprache",
+        "description": "Fertiges Code-Beispiel.",
+        "html_preview": "HTML-Vorschau",
+        "css_preview": "CSS-Vorschau",
+        "javascript_output": "JavaScript-Ausgabe",
         "python": "Python",
         "html": "HTML",
         "css": "CSS",
         "javascript": "JavaScript",
         "sql": "SQL",
-        "new_playground": "Neuer Playground",
-        "save": "Speichern",
-        "delete": "Löschen",
-        "package_name": "Paketname",
-        "package_help": "Installiere beliebige Pakete, die auf PyPI verfügbar sind.",
-        "ready": "Bereit.",
-        "running": "Wird ausgeführt...",
-        "saved": "Gespeichert.",
-        "deleted": "Gelöscht.",
-        "loading": "Lädt...",
-        "error": "Fehler",
-        "welcome": "Willkommen beim Neon Programming Hub!",
-        "example_loaded": "Beispiel geladen.",
-        "no_code": "Kein Code eingegeben.",
-        "select_language": "Sprache auswählen",
-        "name": "Name",
+        "json": "JSON",
+        "bash": "Bash",
+        "markdown": "Markdown",
     }
 }
 
@@ -141,36 +175,39 @@ TRANSLATIONS = {
 
 EXAMPLES = {
 
+    # --------------------------------------------------------
+    # PYTHON
+    # --------------------------------------------------------
+
     "python": [
 
         {
             "name": "Hello World",
-            "code": """print("Hello, world!")
-"""
+            "code": '''print("Hello, world!")'''
         },
 
         {
             "name": "Calculator",
-            "code": """a = 25
+            "code": '''a = 25
 b = 7
 
 print("Addition:", a + b)
 print("Subtraction:", a - b)
 print("Multiplication:", a * b)
 print("Division:", a / b)
-"""
+'''
         },
 
         {
             "name": "Loops",
-            "code": """for number in range(1, 11):
+            "code": '''for number in range(1, 11):
     print("Number:", number)
-"""
+'''
         },
 
         {
             "name": "Lists",
-            "code": """players = [
+            "code": '''players = [
     "Raphael",
     "Alex",
     "Steve",
@@ -179,21 +216,21 @@ print("Division:", a / b)
 
 for player in players:
     print(player)
-"""
+'''
         },
 
         {
             "name": "Functions",
-            "code": """def greet(name):
+            "code": '''def greet(name):
     return f"Hello, {name}!"
 
 print(greet("Raphael"))
-"""
+'''
         },
 
         {
             "name": "Dictionary",
-            "code": """player = {
+            "code": '''player = {
     "name": "Raphael",
     "level": 42,
     "coins": 1337
@@ -202,33 +239,33 @@ print(greet("Raphael"))
 print(player["name"])
 print(player["level"])
 print(player["coins"])
-"""
+'''
         },
 
         {
             "name": "Random Numbers",
-            "code": """import random
+            "code": '''import random
 
 number = random.randint(1, 100)
 
 print("Random number:", number)
-"""
+'''
         },
 
         {
             "name": "Date & Time",
-            "code": """from datetime import datetime
+            "code": '''from datetime import datetime
 
 now = datetime.now()
 
 print("Current time:")
 print(now)
-"""
+'''
         },
 
         {
             "name": "JSON",
-            "code": """import json
+            "code": '''import json
 
 data = {
     "player": "Raphael",
@@ -236,15 +273,13 @@ data = {
     "online": True
 }
 
-text = json.dumps(data, indent=2)
-
-print(text)
-"""
+print(json.dumps(data, indent=2))
+'''
         },
 
         {
             "name": "Classes",
-            "code": """class Player:
+            "code": '''class Player:
     def __init__(self, name, level):
         self.name = name
         self.level = level
@@ -256,26 +291,53 @@ print(text)
 player = Player("Raphael", 100)
 
 player.info()
-"""
+'''
         },
 
         {
-            "name": "File Example",
-            "code": """from pathlib import Path
+            "name": "Exception Handling",
+            "code": '''try:
+    number = int("hello")
+except ValueError:
+    print("That is not a number!")
+'''
+        },
 
-file = Path("example.txt")
+        {
+            "name": "Comprehension",
+            "code": '''numbers = [1, 2, 3, 4, 5]
 
-file.write_text(
-    "Hello from Neon Programming Hub!"
-)
+squares = [
+    number * number
+    for number in numbers
+]
 
-print(file.read_text())
-"""
+print(squares)
+'''
+        },
+
+        {
+            "name": "Counter",
+            "code": '''from collections import Counter
+
+items = [
+    "apple",
+    "banana",
+    "apple",
+    "orange",
+    "banana",
+    "apple"
+]
+
+counter = Counter(items)
+
+print(counter)
+'''
         },
 
         {
             "name": "HTTP Request",
-            "code": """import requests
+            "code": '''import requests
 
 response = requests.get(
     "https://example.com",
@@ -284,24 +346,26 @@ response = requests.get(
 
 print("Status:", response.status_code)
 print(response.text[:500])
-"""
+'''
         },
 
         {
             "name": "NumPy",
-            "code": """import numpy as np
+            "code": '''import numpy as np
 
-numbers = np.array([1, 2, 3, 4, 5])
+numbers = np.array([
+    1, 2, 3, 4, 5
+])
 
 print(numbers)
 print("Mean:", numbers.mean())
 print("Sum:", numbers.sum())
-"""
+'''
         },
 
         {
-            "name": "Rich Terminal",
-            "code": """from rich.console import Console
+            "name": "Rich",
+            "code": '''from rich.console import Console
 
 console = Console()
 
@@ -312,15 +376,81 @@ console.print(
 console.print(
     "[green]Everything works![/green]"
 )
-"""
+'''
+        },
+
+        {
+            "name": "Mini Game",
+            "code": '''import random
+
+secret = random.randint(1, 10)
+
+print("I picked a number from 1 to 10.")
+
+guess = 5
+
+print("Your guess:", guess)
+
+if guess == secret:
+    print("You won!")
+else:
+    print("The number was:", secret)
+'''
+        },
+
+        {
+            "name": "Fibonacci",
+            "code": '''a = 0
+b = 1
+
+for _ in range(10):
+    print(a)
+    a, b = b, a + b
+'''
+        },
+
+        {
+            "name": "Prime Numbers",
+            "code": '''for number in range(2, 50):
+
+    prime = True
+
+    for divisor in range(2, number):
+        if number % divisor == 0:
+            prime = False
+            break
+
+    if prime:
+        print(number)
+'''
+        },
+
+        {
+            "name": "Pathlib",
+            "code": '''from pathlib import Path
+
+folder = Path("neon_test")
+
+folder.mkdir(
+    exist_ok=True
+)
+
+print("Folder:", folder)
+print("Exists:", folder.exists())
+'''
         }
     ],
+
+
+    # --------------------------------------------------------
+    # HTML
+    # --------------------------------------------------------
 
     "html": [
 
         {
             "name": "Basic HTML",
-            "code": """<!DOCTYPE html>
+            "code": '''<!DOCTYPE html>
 <html>
 <head>
     <title>Neon Page</title>
@@ -334,12 +464,12 @@ console.print(
 
 </body>
 </html>
-"""
+'''
         },
 
         {
             "name": "Button",
-            "code": """<!DOCTYPE html>
+            "code": '''<!DOCTYPE html>
 <html>
 
 <body>
@@ -350,12 +480,12 @@ console.print(
 
 </body>
 </html>
-"""
+'''
         },
 
         {
             "name": "Card",
-            "code": """<div class="card">
+            "code": '''<div class="card">
 
     <h1>Neon Card</h1>
 
@@ -368,12 +498,67 @@ console.print(
     </button>
 
 </div>
-"""
+'''
+        },
+
+        {
+            "name": "Form",
+            "code": '''<!DOCTYPE html>
+<html>
+
+<body>
+
+<h1>Login</h1>
+
+<form>
+
+    <input
+        type="text"
+        placeholder="Username"
+    >
+
+    <br><br>
+
+    <input
+        type="password"
+        placeholder="Password"
+    >
+
+    <br><br>
+
+    <button>
+        Login
+    </button>
+
+</form>
+
+</body>
+</html>
+'''
+        },
+
+        {
+            "name": "Image",
+            "code": '''<!DOCTYPE html>
+<html>
+
+<body>
+
+<h1>Image Example</h1>
+
+<img
+    src="https://placehold.co/600x300"
+    alt="Example image"
+>
+
+</body>
+</html>
+'''
         },
 
         {
             "name": "Video",
-            "code": """<!DOCTYPE html>
+            "code": '''<!DOCTYPE html>
 <html>
 
 <body>
@@ -381,20 +566,86 @@ console.print(
 <h1>Video Player</h1>
 
 <video controls width="700">
-    <source src="video.mp4" type="video/mp4">
+
+    <source
+        src="video.mp4"
+        type="video/mp4"
+    >
+
 </video>
 
 </body>
 </html>
-"""
+'''
+        },
+
+        {
+            "name": "Navigation",
+            "code": '''<!DOCTYPE html>
+<html>
+
+<body>
+
+<nav>
+
+    <a href="#">Home</a>
+    <a href="#">Projects</a>
+    <a href="#">About</a>
+    <a href="#">Contact</a>
+
+</nav>
+
+</body>
+</html>
+'''
+        },
+
+        {
+            "name": "Canvas",
+            "code": '''<!DOCTYPE html>
+<html>
+
+<body>
+
+<canvas
+    id="canvas"
+    width="600"
+    height="300">
+</canvas>
+
+<script>
+
+const canvas =
+    document.getElementById("canvas");
+
+const ctx =
+    canvas.getContext("2d");
+
+ctx.fillRect(
+    50,
+    50,
+    200,
+    100
+);
+
+</script>
+
+</body>
+</html>
+'''
         }
     ],
+
+
+    # --------------------------------------------------------
+    # CSS
+    # --------------------------------------------------------
 
     "css": [
 
         {
             "name": "Neon Button",
-            "code": """.button {
+            "code": '''.button {
     background: #080808;
     color: #00ffff;
 
@@ -409,12 +660,12 @@ console.print(
 
     cursor: pointer;
 }
-"""
+'''
         },
 
         {
             "name": "Neon Card",
-            "code": """.card {
+            "code": '''.card {
     background: #101018;
 
     border: 1px solid #8a2be2;
@@ -424,14 +675,15 @@ console.print(
     padding: 25px;
 
     box-shadow:
-        0 0 25px rgba(138,43,226,0.5);
+        0 0 25px
+        rgba(138,43,226,0.5);
 }
-"""
+'''
         },
 
         {
             "name": "Animation",
-            "code": """@keyframes pulse {
+            "code": '''@keyframes pulse {
 
     0% {
         transform: scale(1);
@@ -447,43 +699,103 @@ console.print(
 }
 
 .pulse {
-    animation: pulse 2s infinite;
+    animation:
+        pulse 2s infinite;
 }
-"""
+'''
+        },
+
+        {
+            "name": "Gradient",
+            "code": '''body {
+    background:
+        linear-gradient(
+            135deg,
+            #050509,
+            #201040,
+            #001f2b
+        );
+
+    color: white;
+}
+'''
+        },
+
+        {
+            "name": "Grid",
+            "code": '''.grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(200px, 1fr)
+        );
+
+    gap: 20px;
+}
+'''
+        },
+
+        {
+            "name": "Glass",
+            "code": '''.glass {
+    background:
+        rgba(255,255,255,0.08);
+
+    backdrop-filter:
+        blur(15px);
+
+    border:
+        1px solid
+        rgba(255,255,255,0.15);
+
+    border-radius: 20px;
+}
+'''
         }
     ],
+
+
+    # --------------------------------------------------------
+    # JAVASCRIPT
+    # --------------------------------------------------------
 
     "javascript": [
 
         {
             "name": "Hello",
-            "code": """console.log("Hello from JavaScript!");
-"""
+            "code": '''console.log(
+    "Hello from JavaScript!"
+);'''
         },
 
         {
             "name": "Counter",
-            "code": """let counter = 0;
+            "code": '''let counter = 0;
 
 counter++;
 
-console.log("Counter:", counter);
-"""
+console.log(
+    "Counter:",
+    counter
+);'''
         },
 
         {
             "name": "Function",
-            "code": """function greet(name) {
+            "code": '''function greet(name) {
     return `Hello, ${name}!`;
 }
 
-console.log(greet("Raphael"));
-"""
+console.log(
+    greet("Raphael")
+);'''
         },
 
         {
             "name": "Array",
-            "code": """const players = [
+            "code": '''const players = [
     "Steve",
     "Alex",
     "Raphael"
@@ -491,16 +803,71 @@ console.log(greet("Raphael"));
 
 players.forEach(player => {
     console.log(player);
-});
-"""
+});'''
+        },
+
+        {
+            "name": "Object",
+            "code": '''const player = {
+    name: "Raphael",
+    level: 100,
+    online: true
+};
+
+console.log(player);'''
+        },
+
+        {
+            "name": "Random Number",
+            "code": '''const number =
+    Math.floor(
+        Math.random() * 100
+    ) + 1;
+
+console.log(
+    "Random:",
+    number
+);'''
+        },
+
+        {
+            "name": "Timer",
+            "code": '''console.log("Starting...");
+
+setTimeout(() => {
+
+    console.log(
+        "Finished!"
+    );
+
+}, 1000);'''
+        },
+
+        {
+            "name": "Map",
+            "code": '''const numbers = [
+    1, 2, 3, 4, 5
+];
+
+const doubled =
+    numbers.map(
+        number => number * 2
+    );
+
+console.log(doubled);'''
         }
     ],
+
+
+    # --------------------------------------------------------
+    # SQL
+    # --------------------------------------------------------
 
     "sql": [
 
         {
             "name": "Create Table",
-            "code": """CREATE TABLE players (
+            "code": '''CREATE TABLE players (
     id INTEGER PRIMARY KEY,
     name TEXT,
     level INTEGER
@@ -512,12 +879,12 @@ VALUES
 ('Raphael', 42);
 
 SELECT * FROM players;
-"""
+'''
         },
 
         {
             "name": "Multiple Players",
-            "code": """CREATE TABLE players (
+            "code": '''CREATE TABLE players (
     id INTEGER PRIMARY KEY,
     name TEXT,
     level INTEGER
@@ -533,12 +900,12 @@ VALUES
 SELECT *
 FROM players
 ORDER BY level DESC;
-"""
+'''
         },
 
         {
             "name": "WHERE",
-            "code": """CREATE TABLE players (
+            "code": '''CREATE TABLE players (
     name TEXT,
     level INTEGER
 );
@@ -551,43 +918,182 @@ INSERT INTO players VALUES
 SELECT *
 FROM players
 WHERE level >= 50;
-"""
+'''
+        },
+
+        {
+            "name": "COUNT",
+            "code": '''CREATE TABLE players (
+    name TEXT,
+    level INTEGER
+);
+
+INSERT INTO players VALUES
+('Steve', 10),
+('Alex', 50),
+('Raphael', 100);
+
+SELECT COUNT(*) AS total
+FROM players;
+'''
+        },
+
+        {
+            "name": "GROUP BY",
+            "code": '''CREATE TABLE players (
+    name TEXT,
+    team TEXT
+);
+
+INSERT INTO players VALUES
+('Steve', 'Red'),
+('Alex', 'Blue'),
+('Raphael', 'Red'),
+('Notch', 'Blue');
+
+SELECT
+    team,
+    COUNT(*) AS players
+FROM players
+GROUP BY team;
+'''
+        }
+    ],
+
+
+    # --------------------------------------------------------
+    # JSON
+    # --------------------------------------------------------
+
+    "json": [
+
+        {
+            "name": "Player",
+            "code": '''{
+    "name": "Raphael",
+    "level": 100,
+    "online": true
+}'''
+        },
+
+        {
+            "name": "Server",
+            "code": '''{
+    "server": "Neon SMP",
+    "online": true,
+    "players": 42,
+    "max_players": 100
+}'''
+        },
+
+        {
+            "name": "Settings",
+            "code": '''{
+    "theme": "neon",
+    "language": "de",
+    "notifications": true,
+    "fullscreen": false
+}'''
+        }
+    ],
+
+
+    # --------------------------------------------------------
+    # BASH
+    # --------------------------------------------------------
+
+    "bash": [
+
+        {
+            "name": "Hello",
+            "code": '''echo "Hello from Bash!"'''
+        },
+
+        {
+            "name": "Variables",
+            "code": '''NAME="Raphael"
+
+echo "Hello $NAME!"'''
+        },
+
+        {
+            "name": "Loop",
+            "code": '''for number in 1 2 3 4 5
+do
+    echo "Number: $number"
+done'''
+        },
+
+        {
+            "name": "System",
+            "code": '''echo "System information:"
+uname -a'''
+        }
+    ],
+
+
+    # --------------------------------------------------------
+    # MARKDOWN
+    # --------------------------------------------------------
+
+    "markdown": [
+
+        {
+            "name": "README",
+            "code": '''# Neon Project
+
+Welcome to my project!
+
+## Features
+
+- Fast
+- Simple
+- Open
+- Neon
+
+## Installation
+
+Run the project and enjoy!'''
+        },
+
+        {
+            "name": "Table",
+            "code": '''# Players
+
+| Name | Level |
+|------|------:|
+| Steve | 20 |
+| Alex | 35 |
+| Raphael | 100 |'''
+        },
+
+        {
+            "name": "Checklist",
+            "code": '''# TODO
+
+- [x] Create project
+- [x] Add editor
+- [ ] Add more examples
+- [ ] Publish project'''
         }
     ]
 }
 
 
 # ============================================================
-# DEFAULT PLAYGROUNDS
+# LANGUAGE LABELS
 # ============================================================
 
-DEFAULT_PLAYGROUNDS = [
-    {
-        "name": "Python Playground",
-        "language": "python",
-        "code": EXAMPLES["python"][0]["code"]
-    },
-    {
-        "name": "HTML Playground",
-        "language": "html",
-        "code": EXAMPLES["html"][0]["code"]
-    },
-    {
-        "name": "CSS Playground",
-        "language": "css",
-        "code": EXAMPLES["css"][0]["code"]
-    },
-    {
-        "name": "JavaScript Playground",
-        "language": "javascript",
-        "code": EXAMPLES["javascript"][0]["code"]
-    },
-    {
-        "name": "SQL Playground",
-        "language": "sql",
-        "code": EXAMPLES["sql"][0]["code"]
-    }
-]
+LANGUAGE_LABELS = {
+    "python": "Python",
+    "html": "HTML",
+    "css": "CSS",
+    "javascript": "JavaScript",
+    "sql": "SQL",
+    "json": "JSON",
+    "bash": "Bash",
+    "markdown": "Markdown"
+}
 
 
 # ============================================================
@@ -595,6 +1101,7 @@ DEFAULT_PLAYGROUNDS = [
 # ============================================================
 
 def execute_python(code):
+
     if not code.strip():
         return {
             "success": False,
@@ -617,7 +1124,10 @@ def execute_python(code):
         started = time.time()
 
         result = subprocess.run(
-            [sys.executable, temp_path],
+            [
+                sys.executable,
+                temp_path
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -635,19 +1145,26 @@ def execute_python(code):
         }
 
     except subprocess.TimeoutExpired:
+
         return {
             "success": False,
-            "output": "Execution timed out."
+            "output": (
+                "Execution timed out after "
+                f"{PYTHON_TIMEOUT} seconds."
+            )
         }
 
     except Exception as exc:
+
         return {
             "success": False,
             "output": str(exc)
         }
 
     finally:
+
         if temp_path:
+
             try:
                 os.remove(temp_path)
             except Exception:
@@ -655,7 +1172,9 @@ def execute_python(code):
 
 
 def execute_sql(code):
+
     if not code.strip():
+
         return {
             "success": False,
             "output": "No SQL entered."
@@ -664,6 +1183,7 @@ def execute_sql(code):
     conn = None
 
     try:
+
         conn = sqlite3.connect(":memory:")
 
         cursor = conn.cursor()
@@ -673,6 +1193,7 @@ def execute_sql(code):
         rows = cursor.fetchall()
 
         if cursor.description:
+
             columns = [
                 description[0]
                 for description in cursor.description
@@ -686,8 +1207,12 @@ def execute_sql(code):
                 indent=2,
                 default=str
             )
+
         else:
-            output = f"SQL executed successfully. Rows affected: {cursor.rowcount}"
+
+            output = (
+                "SQL executed successfully."
+            )
 
         return {
             "success": True,
@@ -695,26 +1220,31 @@ def execute_sql(code):
         }
 
     except Exception as exc:
+
         return {
             "success": False,
             "output": str(exc)
         }
 
     finally:
+
         if conn:
             conn.close()
 
 
 def install_package(package):
+
     package = package.strip()
 
     if not package:
+
         return {
             "success": False,
             "output": "Please enter a package name."
         }
 
     try:
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -737,12 +1267,16 @@ def install_package(package):
         }
 
     except subprocess.TimeoutExpired:
+
         return {
             "success": False,
-            "output": "Package installation timed out."
+            "output": (
+                "Package installation timed out."
+            )
         }
 
     except Exception as exc:
+
         return {
             "success": False,
             "output": str(exc)
@@ -750,11 +1284,12 @@ def install_package(package):
 
 
 # ============================================================
-# API ROUTES
+# API
 # ============================================================
 
 @app.get("/health")
 def health():
+
     return jsonify({
         "status": "online",
         "service": "Neon Programming Hub"
@@ -763,95 +1298,125 @@ def health():
 
 @app.get("/")
 def index():
+
     return render_template_string(HTML)
 
 
 @app.post("/api/python/run")
 def api_python_run():
-    data = request.get_json(silent=True) or {}
 
-    code = data.get("code", "")
+    data = request.get_json(
+        silent=True
+    ) or {}
 
     return jsonify(
-        execute_python(code)
+        execute_python(
+            data.get("code", "")
+        )
     )
 
 
 @app.post("/api/python/install")
 def api_python_install():
-    data = request.get_json(silent=True) or {}
 
-    package = data.get("package", "")
+    data = request.get_json(
+        silent=True
+    ) or {}
 
     return jsonify(
-        install_package(package)
+        install_package(
+            data.get("package", "")
+        )
     )
 
 
 @app.post("/api/sql/run")
 def api_sql_run():
-    data = request.get_json(silent=True) or {}
 
-    code = data.get("code", "")
+    data = request.get_json(
+        silent=True
+    ) or {}
 
     return jsonify(
-        execute_sql(code)
+        execute_sql(
+            data.get("code", "")
+        )
     )
 
 
 @app.get("/api/examples")
 def api_examples():
+
     return jsonify(EXAMPLES)
 
 
 @app.get("/api/playgrounds")
 def api_playgrounds():
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
 
     rows = conn.execute("""
-        SELECT id, name, language, code, created_at
+        SELECT
+            id,
+            name,
+            language,
+            code,
+            created_at
         FROM playgrounds
         ORDER BY id DESC
     """).fetchall()
 
     conn.close()
 
-    result = []
-
-    for row in rows:
-        result.append({
+    return jsonify([
+        {
             "id": row[0],
             "name": row[1],
             "language": row[2],
             "code": row[3],
             "created_at": row[4]
-        })
-
-    return jsonify(result)
+        }
+        for row in rows
+    ])
 
 
 @app.post("/api/playgrounds")
 def api_create_playground():
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-    name = data.get("name", "Untitled Playground")
-    language = data.get("language", "python")
-    code = data.get("code", "")
+    name = data.get(
+        "name",
+        "Untitled Playground"
+    )
 
-    conn = sqlite3.connect(DB_FILE)
+    language = data.get(
+        "language",
+        "python"
+    )
 
-    cursor = conn.execute("""
+    code = data.get(
+        "code",
+        ""
+    )
+
+    conn = get_db()
+
+    cursor = conn.execute(
+        """
         INSERT INTO playgrounds
         (name, language, code, created_at)
         VALUES (?, ?, ?, ?)
-    """, (
-        name,
-        language,
-        code,
-        time.time()
-    ))
+        """,
+        (
+            name,
+            language,
+            code,
+            time.time()
+        )
+    )
 
     conn.commit()
 
@@ -865,13 +1430,59 @@ def api_create_playground():
     })
 
 
-@app.delete("/api/playgrounds/<int:playground_id>")
-def api_delete_playground(playground_id):
+@app.put("/api/playgrounds/<int:playground_id>")
+def api_update_playground(
+    playground_id
+):
 
-    conn = sqlite3.connect(DB_FILE)
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    name = data.get("name")
+    language = data.get("language")
+    code = data.get("code")
+
+    conn = get_db()
 
     conn.execute(
-        "DELETE FROM playgrounds WHERE id = ?",
+        """
+        UPDATE playgrounds
+        SET name = ?,
+            language = ?,
+            code = ?
+        WHERE id = ?
+        """,
+        (
+            name,
+            language,
+            code,
+            playground_id
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True
+    })
+
+
+@app.delete(
+    "/api/playgrounds/<int:playground_id>"
+)
+def api_delete_playground(
+    playground_id
+):
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        DELETE FROM playgrounds
+        WHERE id = ?
+        """,
         (playground_id,)
     )
 
@@ -923,6 +1534,7 @@ HTML = r"""
 
 body {
     margin: 0;
+
     background:
         radial-gradient(
             circle at top left,
@@ -965,7 +1577,9 @@ header {
     padding: 16px 20px;
 
     display: flex;
+
     align-items: center;
+
     justify-content: space-between;
 
     gap: 15px;
@@ -973,7 +1587,9 @@ header {
 
 .logo {
     display: flex;
+
     align-items: center;
+
     gap: 12px;
 }
 
@@ -984,6 +1600,7 @@ header {
     border-radius: 13px;
 
     display: grid;
+
     place-items: center;
 
     background:
@@ -998,7 +1615,8 @@ header {
     font-weight: 1000;
 
     box-shadow:
-        0 0 25px rgba(0,255,255,.25);
+        0 0 25px
+        rgba(0,255,255,.25);
 }
 
 .logo h1 {
@@ -1028,7 +1646,8 @@ input {
     background: var(--panel2);
     color: var(--text);
 
-    border: 1px solid var(--border);
+    border:
+        1px solid var(--border);
 
     border-radius: 10px;
 
@@ -1042,11 +1661,13 @@ input:focus {
     border-color: var(--cyan);
 
     box-shadow:
-        0 0 0 2px rgba(0,255,255,.08);
+        0 0 0 2px
+        rgba(0,255,255,.08);
 }
 
 button {
-    border: 1px solid var(--border);
+    border:
+        1px solid var(--border);
 
     background: var(--panel2);
 
@@ -1201,7 +1822,8 @@ main {
     overflow: hidden;
 
     box-shadow:
-        0 20px 60px rgba(0,0,0,.22);
+        0 20px 60px
+        rgba(0,0,0,.22);
 }
 
 .panel-header {
@@ -1243,11 +1865,9 @@ textarea {
 
     padding: 18px;
 
-    background:
-        #07070d;
+    background: #07070d;
 
-    color:
-        #e9e9ff;
+    color: #e9e9ff;
 
     font-family:
         "JetBrains Mono",
@@ -1272,8 +1892,7 @@ textarea {
 
     padding: 18px;
 
-    background:
-        #050507;
+    background: #050507;
 
     font-family:
         "JetBrains Mono",
@@ -1284,8 +1903,7 @@ textarea {
 
     word-break: break-word;
 
-    color:
-        #d8d8e8;
+    color: #d8d8e8;
 }
 
 .output.success {
@@ -1300,7 +1918,10 @@ textarea {
     display: grid;
 
     grid-template-columns:
-        repeat(auto-fill, minmax(220px, 1fr));
+        repeat(
+            auto-fill,
+            minmax(220px, 1fr)
+        );
 
     gap: 12px;
 
@@ -1344,7 +1965,6 @@ textarea {
 
 .package-row {
     display: flex;
-
     gap: 8px;
 }
 
@@ -1413,7 +2033,6 @@ textarea {
 
 .playground-actions {
     display: flex;
-
     gap: 6px;
 }
 
@@ -1494,6 +2113,7 @@ textarea {
         </div>
 
         <div>
+
             <h1 id="brand">
                 NEON PROGRAMMING HUB
             </h1>
@@ -1501,14 +2121,16 @@ textarea {
             <span id="subtitle">
                 Code. Experiment. Build.
             </span>
+
         </div>
 
     </div>
 
     <div class="header-controls">
 
-        <select id="languageSelect"
-                onchange="changeUILanguage()">
+        <select
+            id="languageSelect"
+            onchange="changeUILanguage()">
 
             <option value="en">
                 🇬🇧 English
@@ -1531,36 +2153,48 @@ textarea {
 
     <div class="sidebar-section">
 
-        <div class="sidebar-title">
+        <div
+            class="sidebar-title"
+            id="workspaceTitle">
+
             Workspace
+
         </div>
 
         <button
             class="nav-button active"
             onclick="showPage('editor')"
             id="navEditor">
+
             💻 Editor
+
         </button>
 
         <button
             class="nav-button"
             onclick="showPage('examples')"
             id="navExamples">
+
             📚 Examples
+
         </button>
 
         <button
             class="nav-button"
             onclick="showPage('playgrounds')"
             id="navPlaygrounds">
+
             🧪 Playgrounds
+
         </button>
 
         <button
             class="nav-button"
             onclick="showPage('packages')"
             id="navPackages">
+
             📦 Packages
+
         </button>
 
     </div>
@@ -1569,6 +2203,7 @@ textarea {
 
 
 <main>
+
 
 <!-- ======================================================
      EDITOR
@@ -1592,8 +2227,9 @@ textarea {
 
         <div class="actions">
 
-            <select id="language"
-                    onchange="changeLanguage()">
+            <select
+                id="language"
+                onchange="changeLanguage()">
 
                 <option value="python">
                     Python
@@ -1615,19 +2251,40 @@ textarea {
                     SQL
                 </option>
 
+                <option value="json">
+                    JSON
+                </option>
+
+                <option value="bash">
+                    Bash
+                </option>
+
+                <option value="markdown">
+                    Markdown
+                </option>
+
             </select>
 
-            <button onclick="clearEditor()">
+            <button
+                onclick="clearEditor()"
+                id="clearButton">
+
                 🗑 Clear
+
             </button>
 
-            <button onclick="copyCode()">
+            <button
+                onclick="copyCode()"
+                id="copyButton">
+
                 📋 Copy
+
             </button>
 
             <button
                 class="primary"
-                onclick="runCode()">
+                onclick="runCode()"
+                id="runButton">
 
                 ▶ Run
 
@@ -1644,13 +2301,16 @@ textarea {
 
             <div class="panel-header">
 
-                <strong>
+                <strong id="codeTitle">
                     Code
                 </strong>
 
-                <span class="badge"
-                      id="languageBadge">
+                <span
+                    class="badge"
+                    id="languageBadge">
+
                     Python
+
                 </span>
 
             </div>
@@ -1674,8 +2334,12 @@ textarea {
                     Output
                 </strong>
 
-                <span class="status">
+                <span
+                    class="status"
+                    id="consoleTitle">
+
                     Console
+
                 </span>
 
             </div>
@@ -1699,8 +2363,9 @@ textarea {
      EXAMPLES
 ====================================================== -->
 
-<section id="page-examples"
-         style="display:none;">
+<section
+    id="page-examples"
+    style="display:none;">
 
     <div class="topbar">
 
@@ -1710,7 +2375,7 @@ textarea {
                 Examples
             </h2>
 
-            <p>
+            <p id="examplesDescription">
                 Ready-to-use code examples.
             </p>
 
@@ -1740,6 +2405,18 @@ textarea {
                 SQL
             </option>
 
+            <option value="json">
+                JSON
+            </option>
+
+            <option value="bash">
+                Bash
+            </option>
+
+            <option value="markdown">
+                Markdown
+            </option>
+
         </select>
 
     </div>
@@ -1750,6 +2427,7 @@ textarea {
         <div
             id="exampleGrid"
             class="example-grid">
+
         </div>
 
     </div>
@@ -1761,18 +2439,19 @@ textarea {
      PLAYGROUNDS
 ====================================================== -->
 
-<section id="page-playgrounds"
-         style="display:none;">
+<section
+    id="page-playgrounds"
+    style="display:none;">
 
     <div class="topbar">
 
         <div class="title">
 
-            <h2>
+            <h2 id="playgroundsTitle">
                 Playgrounds
             </h2>
 
-            <p>
+            <p id="playgroundsDescription">
                 Save your own coding projects.
             </p>
 
@@ -1780,7 +2459,8 @@ textarea {
 
         <button
             class="primary"
-            onclick="newPlayground()">
+            onclick="newPlayground()"
+            id="newPlaygroundButton">
 
             ➕ New Playground
 
@@ -1808,18 +2488,19 @@ textarea {
      PACKAGES
 ====================================================== -->
 
-<section id="page-packages"
-         style="display:none;">
+<section
+    id="page-packages"
+    style="display:none;">
 
     <div class="topbar">
 
         <div class="title">
 
-            <h2>
+            <h2 id="packagesTitle">
                 Packages
             </h2>
 
-            <p>
+            <p id="packagesDescription">
                 Install packages from PyPI.
             </p>
 
@@ -1832,8 +2513,12 @@ textarea {
 
         <div class="package-box">
 
-            <div class="sidebar-title">
+            <div
+                class="sidebar-title"
+                id="packageNameLabel">
+
                 Package name
+
             </div>
 
             <div class="package-row">
@@ -1844,7 +2529,8 @@ textarea {
 
                 <button
                     class="primary"
-                    onclick="installPackage()">
+                    onclick="installPackage()"
+                    id="installButton">
 
                     📦 Install
 
@@ -1852,9 +2538,13 @@ textarea {
 
             </div>
 
-            <p class="status">
-                Any package available on PyPI can be entered.
-                Examples: requests, flask, rich, numpy, pillow
+            <p
+                class="status"
+                id="packageHelp">
+
+                Install any package available
+                from PyPI.
+
             </p>
 
             <div
@@ -1878,17 +2568,49 @@ textarea {
 
 <script>
 
-const examples = """ + json.dumps(EXAMPLES) + r""";
+const examples =
+""" + json.dumps(EXAMPLES) + r""";
 
-const translations = """ + json.dumps(TRANSLATIONS) + r""";
+const translations =
+""" + json.dumps(TRANSLATIONS) + r""";
+
+const languageLabels =
+""" + json.dumps(LANGUAGE_LABELS) + r""";
+
 
 let currentUILanguage = "en";
 
 let currentLanguage = "python";
 
 
+function t(key) {
+
+    return (
+        translations[currentUILanguage][key]
+        ||
+        translations.en[key]
+        ||
+        key
+    );
+
+}
+
+
+function languageName(language) {
+
+    const label =
+        languageLabels[language];
+
+    if (label) {
+        return label;
+    }
+
+    return language;
+}
+
+
 // ========================================================
-// LANGUAGE
+// UI LANGUAGE
 // ========================================================
 
 function changeUILanguage() {
@@ -1898,43 +2620,141 @@ function changeUILanguage() {
             "languageSelect"
         ).value;
 
-    const t =
-        translations[currentUILanguage];
+    applyTranslations();
 
-    document.getElementById("brand").textContent =
-        t.brand;
+    renderExamples();
 
-    document.getElementById("subtitle").textContent =
-        t.subtitle;
+    updateEditorLanguage();
 
-    document.getElementById("outputTitle").textContent =
-        t.output;
+}
 
-    document.getElementById("status").textContent =
-        t.ready;
 
-    document.querySelectorAll(
-        "button"
-    ).forEach(button => {
+function applyTranslations() {
 
-        const text =
-            button.textContent.trim();
+    document.getElementById(
+        "brand"
+    ).textContent =
+        t("brand");
 
-        if (text.includes("Run") ||
-            text.includes("Ausführen")) {
+    document.getElementById(
+        "subtitle"
+    ).textContent =
+        t("subtitle");
 
-            button.textContent =
-                t.run;
+    document.getElementById(
+        "workspaceTitle"
+    ).textContent =
+        t("workspace");
 
-        }
+    document.getElementById(
+        "navEditor"
+    ).textContent =
+        "💻 " + t("editor");
 
-    });
+    document.getElementById(
+        "navExamples"
+    ).textContent =
+        "📚 " + t("examples");
+
+    document.getElementById(
+        "navPlaygrounds"
+    ).textContent =
+        "🧪 " + t("playgrounds");
+
+    document.getElementById(
+        "navPackages"
+    ).textContent =
+        "📦 " + t("packages");
+
+    document.getElementById(
+        "clearButton"
+    ).textContent =
+        t("clear");
+
+    document.getElementById(
+        "copyButton"
+    ).textContent =
+        t("copy");
+
+    document.getElementById(
+        "runButton"
+    ).textContent =
+        t("run");
+
+    document.getElementById(
+        "codeTitle"
+    ).textContent =
+        t("code");
+
+    document.getElementById(
+        "outputTitle"
+    ).textContent =
+        t("output");
+
+    document.getElementById(
+        "consoleTitle"
+    ).textContent =
+        t("console");
+
+    document.getElementById(
+        "examplesTitle"
+    ).textContent =
+        t("examples");
+
+    document.getElementById(
+        "examplesDescription"
+    ).textContent =
+        t("description");
+
+    document.getElementById(
+        "playgroundsTitle"
+    ).textContent =
+        t("playgrounds");
+
+    document.getElementById(
+        "playgroundsDescription"
+    ).textContent =
+        currentUILanguage === "de"
+            ? "Speichere deine eigenen Coding-Projekte."
+            : "Save your own coding projects.";
+
+    document.getElementById(
+        "newPlaygroundButton"
+    ).textContent =
+        t("new_playground");
+
+    document.getElementById(
+        "packagesTitle"
+    ).textContent =
+        t("packages");
+
+    document.getElementById(
+        "packagesDescription"
+    ).textContent =
+        currentUILanguage === "de"
+            ? "Installiere Python-Pakete von PyPI."
+            : "Install Python packages from PyPI.";
+
+    document.getElementById(
+        "packageNameLabel"
+    ).textContent =
+        t("package_name");
+
+    document.getElementById(
+        "installButton"
+    ).textContent =
+        t("install");
+
+    document.getElementById(
+        "packageHelp"
+    ).textContent =
+        t("package_help");
 
 }
 
 
 // ========================================================
-// PAGE NAVIGATION
+// NAVIGATION
 // ========================================================
 
 function showPage(page) {
@@ -1953,18 +2773,53 @@ function showPage(page) {
                 "page-" + name
             );
 
-        if (element) {
-            element.style.display =
-                name === page
-                    ? "block"
-                    : "none";
+        if (!element) {
+            return;
         }
 
+        element.style.display =
+            name === page
+                ? "block"
+                : "none";
+
     });
+
+
+    document.querySelectorAll(
+        ".nav-button"
+    ).forEach(button => {
+
+        button.classList.remove(
+            "active"
+        );
+
+    });
+
+
+    const navMap = {
+        editor: "navEditor",
+        examples: "navExamples",
+        playgrounds: "navPlaygrounds",
+        packages: "navPackages"
+    };
+
+
+    const active =
+        document.getElementById(
+            navMap[page]
+        );
+
+    if (active) {
+        active.classList.add(
+            "active"
+        );
+    }
+
 
     if (page === "examples") {
         renderExamples();
     }
+
 
     if (page === "playgrounds") {
         loadPlaygrounds();
@@ -1974,7 +2829,7 @@ function showPage(page) {
 
 
 // ========================================================
-// LANGUAGE / EDITOR
+// EDITOR LANGUAGE
 // ========================================================
 
 function changeLanguage() {
@@ -1984,34 +2839,49 @@ function changeLanguage() {
             "language"
         ).value;
 
-    document.getElementById(
-        "languageBadge"
-    ).textContent =
-        currentLanguage;
+    updateEditorLanguage();
 
-    document.getElementById(
-        "editorTitle"
-    ).textContent =
-        currentLanguage.charAt(0).toUpperCase()
-        + currentLanguage.slice(1)
-        + " Playground";
 
     const list =
         examples[currentLanguage];
 
-    if (list && list.length > 0) {
+    if (
+        list &&
+        list.length > 0
+    ) {
 
         document.getElementById(
             "editor"
         ).value =
             list[0].code;
 
+        document.getElementById(
+            "status"
+        ).textContent =
+            t("example_loaded");
+
     }
 
+}
+
+
+function updateEditorLanguage() {
+
+    const label =
+        languageName(
+            currentLanguage
+        );
+
     document.getElementById(
-        "status"
+        "languageBadge"
     ).textContent =
-        "Example loaded.";
+        label;
+
+    document.getElementById(
+        "editorTitle"
+    ).textContent =
+        label +
+        " Playground";
 
 }
 
@@ -2037,7 +2907,8 @@ function renderExamples() {
     const list =
         examples[language] || [];
 
-    list.forEach((example, index) => {
+
+    list.forEach(example => {
 
         const card =
             document.createElement(
@@ -2047,6 +2918,7 @@ function renderExamples() {
         card.className =
             "example-card";
 
+
         const title =
             document.createElement(
                 "h3"
@@ -2055,15 +2927,15 @@ function renderExamples() {
         title.textContent =
             example.name;
 
+
         const description =
             document.createElement(
                 "p"
             );
 
         description.textContent =
-            "Ready-to-use " +
-            language +
-            " example.";
+            t("description");
+
 
         const button =
             document.createElement(
@@ -2071,7 +2943,8 @@ function renderExamples() {
             );
 
         button.textContent =
-            "Load Example";
+            t("load");
+
 
         button.onclick =
             function() {
@@ -2084,19 +2957,24 @@ function renderExamples() {
                 currentLanguage =
                     language;
 
-                document.getElementById(
-                    "languageBadge"
-                ).textContent =
-                    language;
+                updateEditorLanguage();
 
                 document.getElementById(
                     "editor"
                 ).value =
                     example.code;
 
-                showPage("editor");
+                document.getElementById(
+                    "status"
+                ).textContent =
+                    t("example_loaded");
+
+                showPage(
+                    "editor"
+                );
 
             };
+
 
         card.appendChild(title);
 
@@ -2132,59 +3010,113 @@ async function runCode() {
             "status"
         );
 
+
     if (!code.trim()) {
 
         output.textContent =
-            "No code entered.";
+            t("no_code");
 
         output.className =
             "output error";
+
+        status.textContent =
+            t("error");
 
         return;
 
     }
 
+
     output.className =
         "output";
 
     output.textContent =
-        "Running...";
+        t("running");
 
     status.textContent =
-        "Running...";
+        t("running");
 
 
     try {
 
         let endpoint = null;
 
-        if (currentLanguage === "python") {
+
+        if (
+            currentLanguage ===
+            "python"
+        ) {
 
             endpoint =
                 "/api/python/run";
 
-        } else if (
-            currentLanguage === "sql"
+        }
+
+
+        else if (
+            currentLanguage ===
+            "sql"
         ) {
 
             endpoint =
                 "/api/sql/run";
 
-        } else {
+        }
+
+
+        else {
 
             /*
-             * HTML/CSS/JS aren't executed
-             * on the server.
+             * HTML, CSS, JavaScript,
+             * JSON, Bash and Markdown
+             * are shown directly in the
+             * output panel.
              *
-             * We show the source in the
-             * output panel instead.
+             * Python and SQL are executed
+             * server-side.
              */
 
-            output.textContent =
-                code;
+            if (
+                currentLanguage ===
+                "html"
+            ) {
+
+                const iframe =
+                    document.createElement(
+                        "iframe"
+                    );
+
+                iframe.style.width =
+                    "100%";
+
+                iframe.style.height =
+                    "100%";
+
+                iframe.style.border =
+                    "0";
+
+                iframe.srcdoc =
+                    code;
+
+                output.innerHTML =
+                    "";
+
+                output.appendChild(
+                    iframe
+                );
+
+            }
+
+            else {
+
+                output.textContent =
+                    code;
+
+            }
+
 
             status.textContent =
-                "Ready.";
+                t("finished");
 
             return;
 
@@ -2202,9 +3134,10 @@ async function runCode() {
                             "application/json"
                     },
 
-                    body: JSON.stringify({
-                        code: code
-                    })
+                    body:
+                        JSON.stringify({
+                            code: code
+                        })
                 }
             );
 
@@ -2217,15 +3150,17 @@ async function runCode() {
             data.output ||
             "No output.";
 
+
         output.className =
             data.success
                 ? "output success"
                 : "output error";
 
+
         status.textContent =
             data.success
-                ? "Finished."
-                : "Error.";
+                ? t("finished")
+                : t("error");
 
     }
 
@@ -2238,7 +3173,7 @@ async function runCode() {
             "output error";
 
         status.textContent =
-            "Error.";
+            t("error");
 
     }
 
@@ -2253,17 +3188,23 @@ function clearEditor() {
 
     document.getElementById(
         "editor"
-    ).value = "";
+    ).value =
+        "";
 
     document.getElementById(
         "output"
     ).textContent =
-        "Ready.";
+        t("ready");
+
+    document.getElementById(
+        "output"
+    ).className =
+        "output";
 
     document.getElementById(
         "status"
     ).textContent =
-        "Ready.";
+        t("ready");
 
 }
 
@@ -2279,14 +3220,26 @@ async function copyCode() {
             "editor"
         ).value;
 
-    await navigator.clipboard.writeText(
-        code
-    );
+    try {
 
-    document.getElementById(
-        "status"
-    ).textContent =
-        "Copied.";
+        await navigator.clipboard
+            .writeText(code);
+
+        document.getElementById(
+            "status"
+        ).textContent =
+            t("copied");
+
+    }
+
+    catch (error) {
+
+        document.getElementById(
+            "status"
+        ).textContent =
+            String(error);
+
+    }
 
 }
 
@@ -2307,18 +3260,28 @@ async function installPackage() {
             "packageOutput"
         );
 
+
     if (!packageName) {
 
         output.textContent =
-            "Enter a package name.";
+            currentUILanguage === "de"
+                ? "Bitte einen Paketnamen eingeben."
+                : "Enter a package name.";
 
         return;
 
     }
 
+
     output.textContent =
-        "Installing " +
-        packageName +
+        (
+            currentUILanguage === "de"
+                ? "Installiere "
+                : "Installing "
+        )
+        +
+        packageName
+        +
         "...";
 
 
@@ -2335,10 +3298,11 @@ async function installPackage() {
                             "application/json"
                     },
 
-                    body: JSON.stringify({
-                        package:
-                            packageName
-                    })
+                    body:
+                        JSON.stringify({
+                            package:
+                                packageName
+                        })
                 }
             );
 
@@ -2348,7 +3312,7 @@ async function installPackage() {
 
         output.textContent =
             data.output ||
-            "Finished.";
+            t("finished");
 
     }
 
@@ -2374,7 +3338,7 @@ async function loadPlaygrounds() {
         );
 
     container.textContent =
-        "Loading...";
+        t("loading");
 
 
     try {
@@ -2401,13 +3365,14 @@ async function loadPlaygrounds() {
                 "empty";
 
             empty.textContent =
-                "No saved playgrounds yet.";
+                t("no_playgrounds");
 
             container.appendChild(
                 empty
             );
 
             return;
+
         }
 
 
@@ -2446,7 +3411,9 @@ async function loadPlaygrounds() {
                 );
 
             span.textContent =
-                item.language;
+                languageName(
+                    item.language
+                );
 
 
             info.appendChild(
@@ -2473,7 +3440,8 @@ async function loadPlaygrounds() {
                 );
 
             open.textContent =
-                "Open";
+                t("load_playground");
+
 
             open.onclick =
                 function() {
@@ -2486,17 +3454,21 @@ async function loadPlaygrounds() {
                     currentLanguage =
                         item.language;
 
-                    document.getElementById(
-                        "languageBadge"
-                    ).textContent =
-                        item.language;
+                    updateEditorLanguage();
 
                     document.getElementById(
                         "editor"
                     ).value =
                         item.code;
 
-                    showPage("editor");
+                    document.getElementById(
+                        "status"
+                    ).textContent =
+                        t("example_loaded");
+
+                    showPage(
+                        "editor"
+                    );
 
                 };
 
@@ -2507,10 +3479,11 @@ async function loadPlaygrounds() {
                 );
 
             remove.textContent =
-                "Delete";
+                t("delete");
 
             remove.className =
                 "danger";
+
 
             remove.onclick =
                 function() {
@@ -2565,12 +3538,14 @@ async function newPlayground() {
 
     const name =
         prompt(
-            "Playground name:"
+            t("playground_name")
         );
+
 
     if (!name) {
         return;
     }
+
 
     const language =
         document.getElementById(
@@ -2585,31 +3560,46 @@ async function newPlayground() {
 
     try {
 
-        await fetch(
-            "/api/playgrounds",
-            {
-                method: "POST",
+        const response =
+            await fetch(
+                "/api/playgrounds",
+                {
+                    method: "POST",
 
-                headers: {
-                    "Content-Type":
-                        "application/json"
-                },
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
 
-                body: JSON.stringify({
-                    name: name,
-                    language: language,
-                    code: code
-                })
-            }
-        );
+                    body:
+                        JSON.stringify({
+                            name: name,
+                            language: language,
+                            code: code
+                        })
+                }
+            );
 
-        loadPlaygrounds();
+
+        const data =
+            await response.json();
+
+
+        if (data.success) {
+
+            showPage(
+                "playgrounds"
+            );
+
+        }
 
     }
 
     catch (error) {
 
-        alert(String(error));
+        alert(
+            String(error)
+        );
 
     }
 
@@ -2620,13 +3610,20 @@ async function newPlayground() {
 // DELETE PLAYGROUND
 // ========================================================
 
-async function deletePlayground(id) {
+async function deletePlayground(
+    id
+) {
 
-    if (!confirm(
-        "Delete this playground?"
-    )) {
+    const question =
+        currentUILanguage === "de"
+            ? "Diesen Playground löschen?"
+            : "Delete this playground?";
+
+
+    if (!confirm(question)) {
         return;
     }
+
 
     await fetch(
         "/api/playgrounds/" + id,
@@ -2634,6 +3631,7 @@ async function deletePlayground(id) {
             method: "DELETE"
         }
     );
+
 
     loadPlaygrounds();
 
@@ -2650,33 +3648,36 @@ document.getElementById(
     "keydown",
     function(event) {
 
-        if (event.key === "Tab") {
-
-            event.preventDefault();
-
-            const start =
-                this.selectionStart;
-
-            const end =
-                this.selectionEnd;
-
-            this.value =
-                this.value.substring(
-                    0,
-                    start
-                )
-                +
-                "    "
-                +
-                this.value.substring(
-                    end
-                );
-
-            this.selectionStart =
-                this.selectionEnd =
-                    start + 4;
-
+        if (event.key !== "Tab") {
+            return;
         }
+
+        event.preventDefault();
+
+
+        const start =
+            this.selectionStart;
+
+        const end =
+            this.selectionEnd;
+
+
+        this.value =
+            this.value.substring(
+                0,
+                start
+            )
+            +
+            "    "
+            +
+            this.value.substring(
+                end
+            );
+
+
+        this.selectionStart =
+            this.selectionEnd =
+                start + 4;
 
     }
 );
@@ -2691,7 +3692,12 @@ document.getElementById(
 ).value =
     examples.python[0].code;
 
+
+applyTranslations();
+
 renderExamples();
+
+updateEditorLanguage();
 
 </script>
 
@@ -2709,9 +3715,12 @@ if __name__ == "__main__":
     print("=" * 60)
     print("NEON PROGRAMMING HUB")
     print("=" * 60)
-    print(f"Server: http://0.0.0.0:{PORT}")
+    print(
+        f"Server: http://{HOST}:{PORT}"
+    )
     print("Render mode enabled.")
-    print("No artificial code-size limit enabled.")
+    print("No artificial code-size limit.")
+    print("PyPI package installation enabled.")
     print("=" * 60)
 
     app.run(
@@ -2719,4 +3728,4 @@ if __name__ == "__main__":
         port=PORT,
         debug=False,
         threaded=True
-            )
+)
